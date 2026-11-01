@@ -12,15 +12,14 @@ pub fn format_results(shards: &[Totals], position_of_line: &[u32]) -> String {
         let mut count = 0u64;
         let mut sum = 0u64;
         for shard in shards {
-            let tally = shard.tally[q];
-            let n = tally.count as u64;
+            let n = shard.count[q] as u64;
             count += n;
-            sum += tally.sum as u64 + n * shard.base as u64;
+            sum += shard.sum[q] as u64 + n * shard.base as u64;
         }
         write!(out, "{count} {sum}").expect("writing to a String");
         let mut wanted = MAX_IDS;
         for shard in shards {
-            let take = wanted.min(shard.tally[q].count as usize);
+            let take = wanted.min(shard.count[q] as usize);
             for &doc in &shard.first[q][..take] {
                 write!(out, " {}", shard.base + doc as u32).expect("writing to a String");
             }
