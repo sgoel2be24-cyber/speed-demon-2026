@@ -21,7 +21,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BINARY = os.path.join(ROOT, "track-b", "target", "release", "solution")
 
 WORDS = ["the", "of", "and", "or", "not", "bail", "bond", "writ", "7", "007", "00123", "123", "z", "rich",
-         "s", "a" * 16, "b" * 17, "c" * 31, "d" * 32, "e" * 8, "f" * 9, "stanbul", "273", "u", "c"]
+         "s", "a" * 16, "a" * 17, "b" * 17, "c" * 31, "d" * 32, "d" * 31,
+         "ab" * 8, "ab" * 8 + "c", "ab" * 8 + "d", "e" * 8, "f" * 9, "stanbul", "273", "u", "c"]
 ABSENT = ["zurich", "cafe", "273k", "habeascorpus", "andor", "g" * 32, "and0", "x"]
 SEPARATORS = [" ", " ", " ", ", ", ". ", "; ", "-", "/", "'s ", "—", " — ", " ", "’s ", " (",
               ") ", "ü", "K", "İ", "\U0001d504", "ﬁ", "...", " & "]

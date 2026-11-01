@@ -8,34 +8,91 @@ pub const NONE: u32 = u32::MAX;
 /// A free slot. It equals `NONE`, so a lookup that ends on a free slot reports a miss.
 const EMPTY: u32 = NONE;
 
-/// Open-addressing hash table from term bytes to a dense id.
-///
-/// A slot only says where to look. Every hit compares the full term, because the corpus
-/// holds about 600,000 distinct tokens and a fingerprint collision would change an answer.
-pub struct TermTable<'a> {
-    slots: Vec<u32>,
-    terms: Vec<&'a [u8]>,
-    mask: usize,
+/// The last key byte of a token over 16 bytes. No token byte has this value, so a long token
+/// can never equal a shorter token that shares its first bytes.
+const LONG: u64 = 0xFF << 56;
+
+/// Bytes of the key's two words that a token of each length keeps, and the mark to add.
+const KEEP: [[u64; 3]; 18] = {
+    let mut keep = [[0; 3]; 18];
+    let mut len: usize = 1;
+    while len <= 16 {
+        let (low, high) = (if len < 8 { len } else { 8 }, len.saturating_sub(8));
+        keep[len][0] = if low == 8 { !0 } else { (1 << (low * 8)) - 1 };
+        keep[len][1] = if high == 8 { !0 } else { (1 << (high * 8)) - 1 };
+        len += 1;
+    }
+    keep[17] = [!0, !0 >> 8, LONG];
+    keep
+};
+
+/// The first bytes of a token, lowercase and zero-padded. No token holds a zero byte, so for
+/// tokens of up to 16 bytes two equal keys mean two equal tokens, with no further comparison.
+#[derive(Clone, Copy, PartialEq)]
+pub struct Key([u64; 2]);
+
+impl Key {
+    /// The key of the `len`-byte token starting at `bytes[start]`, which must hold only ASCII
+    /// letters and digits. Setting bit 0x20 lowercases a letter and leaves a digit unchanged.
+    #[inline]
+    pub fn at(bytes: &[u8], start: usize, len: usize) -> Key {
+        const LOWERCASE: u64 = 0x2020_2020_2020_2020;
+        let mut window = [0u8; 16];
+        match bytes.get(start..start + 16) {
+            Some(full) => window.copy_from_slice(full),
+            // Too close to the end of the file for a 16-byte read.
+            None => window[..bytes.len() - start].copy_from_slice(&bytes[start..]),
+        }
+        let [low, high] = [&window[..8], &window[8..]]
+            .map(|half| u64::from_le_bytes(half.try_into().expect("8 bytes")) | LOWERCASE);
+        let [keep_low, keep_high, mark] = KEEP[len.min(17)];
+        Key([low & keep_low, (high & keep_high) | mark])
+    }
+
+    #[inline]
+    fn is_long(self) -> bool {
+        self.0[1] & LONG == LONG
+    }
+
+    #[inline]
+    fn hash(self) -> u64 {
+        const A: u64 = 0x9E37_79B9_7F4A_7C15;
+        const B: u64 = 0xC2B2_AE3D_27D4_EB4F;
+        self.0[0].wrapping_mul(A) ^ self.0[1].wrapping_mul(B)
+    }
 }
 
-fn hash(key: &[u8]) -> usize {
-    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let h = key
-        .iter()
-        .fold(FNV_OFFSET, |h, &b| (h ^ b as u64).wrapping_mul(FNV_PRIME));
-    (h ^ (h >> 32)) as usize
+/// Open-addressing hash table from term bytes to a dense id.
+///
+/// A slot only says where to look. Keys live in a separate array indexed by id, so with ids
+/// in order of use the busiest keys share cache lines. Every hit is an exact comparison: the
+/// corpus holds about 600,000 distinct tokens, so accepting a mere hash match would change
+/// an answer sooner or later.
+pub struct TermTable<'a> {
+    slots: Vec<u32>,
+    keys: Vec<Key>,
+    terms: Vec<&'a [u8]>,
+    shift: u32,
 }
 
 impl<'a> TermTable<'a> {
-    /// `max_terms` bounds the number of distinct terms. The table stays under half full.
+    /// `max_terms` bounds the number of distinct terms.
     pub fn with_capacity(max_terms: usize) -> Self {
-        let size = (max_terms * 2).next_power_of_two();
-        TermTable {
-            slots: vec![EMPTY; size],
+        let mut table = TermTable {
+            slots: Vec::new(),
+            keys: Vec::new(),
             terms: Vec::new(),
-            mask: size - 1,
-        }
+            shift: 0,
+        };
+        table.reset_slots(max_terms);
+        table
+    }
+
+    /// Empties the slots, sized to stay at most a third full with `terms` terms.
+    fn reset_slots(&mut self, terms: usize) {
+        let size = (terms * 3).max(2).next_power_of_two();
+        self.slots = vec![EMPTY; size];
+        self.shift = 64 - size.trailing_zeros();
     }
 
     pub fn len(&self) -> usize {
@@ -46,43 +103,53 @@ impl<'a> TermTable<'a> {
         self.terms[id as usize]
     }
 
-    /// The slot holding `key`, or the empty slot where it belongs.
-    fn find(&self, key: &[u8]) -> usize {
-        let mut i = hash(key) & self.mask;
+    /// The slot holding this token, or the free slot where it belongs.
+    #[inline]
+    fn find(&self, key: Key, token: &[u8]) -> usize {
+        let mask = self.slots.len() - 1;
+        let mut i = (key.hash() >> self.shift) as usize;
         loop {
             let id = self.slots[i];
-            if id == EMPTY || self.terms[id as usize] == key {
+            if id == EMPTY {
                 return i;
             }
-            i = (i + 1) & self.mask;
+            if self.keys[id as usize] == key
+                && (!key.is_long() || self.terms[id as usize].eq_ignore_ascii_case(token))
+            {
+                return i;
+            }
+            i = (i + 1) & mask;
         }
     }
 
     /// The id of `term`, adding it if this is its first appearance.
     pub fn intern(&mut self, term: &'a [u8]) -> u32 {
-        let slot = self.find(term);
+        let key = Key::at(term, 0, term.len());
+        let slot = self.find(key, term);
         if self.slots[slot] == EMPTY {
             self.slots[slot] = self.terms.len() as u32;
+            self.keys.push(key);
             self.terms.push(term);
         }
         self.slots[slot]
     }
 
-    /// The id of a lowercase corpus token, or `NONE` when no query uses it.
+    /// The id of a corpus token, or `NONE` when no query uses it.
     #[inline]
-    pub fn lookup(&self, token: &[u8]) -> u32 {
-        self.slots[self.find(token)]
+    pub fn lookup(&self, key: Key, token: &[u8]) -> u32 {
+        self.slots[self.find(key, token)]
     }
 
-    /// Replaces every id with `new_id[id]`.
+    /// Replaces every id with `new_id[id]` and refits the slots to the real number of terms.
+    /// Terms go back in id order, so the busiest ones get the shortest probes.
     pub fn renumber(&mut self, new_id: &[u32]) {
-        let mut terms: Vec<&[u8]> = vec![&[]; self.terms.len()];
-        for (old, &new) in new_id.iter().enumerate() {
-            terms[new as usize] = self.terms[old];
-        }
-        self.terms = terms;
-        for slot in self.slots.iter_mut().filter(|slot| **slot != EMPTY) {
-            *slot = new_id[*slot as usize];
+        let old_terms = std::mem::take(&mut self.terms);
+        let mut order: Vec<usize> = (0..old_terms.len()).collect();
+        order.sort_by_key(|&old| new_id[old]);
+        self.keys.clear();
+        self.reset_slots(old_terms.len());
+        for old in order {
+            self.intern(old_terms[old]);
         }
     }
 }

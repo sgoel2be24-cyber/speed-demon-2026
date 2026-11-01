@@ -2,39 +2,31 @@
 
 use crate::eval::{Totals, evaluate};
 use crate::queries::Compiled;
-use crate::terms::NONE;
+use crate::terms::{Key, NONE};
 
-/// Maps a byte to its lowercase token form, or to 0 if it is a separator. Only ASCII letters
-/// and digits are token bytes: every byte of 0x80 or above separates, even inside a letter.
-const TOKEN_BYTE: [u8; 256] = {
-    let mut table = [0u8; 256];
+/// Whether a byte belongs to a token. Only ASCII letters and digits do: every byte of 0x80 or
+/// above separates, even inside a letter.
+const IS_TOKEN: [bool; 256] = {
+    let mut table = [false; 256];
     let mut b = 0;
     while b < 256 {
-        table[b] = match b as u8 {
-            c @ (b'a'..=b'z' | b'0'..=b'9') => c,
-            c @ b'A'..=b'Z' => c + 32,
-            _ => 0,
-        };
+        table[b] = (b as u8).is_ascii_alphanumeric();
         b += 1;
     }
     table
 };
 
-/// Splits one document's text into tokens. `lower` receives the lowercase bytes of all the
-/// tokens, end to end, and `ends` the offset in `lower` where each token stops. Returns the
-/// position of the LF that ends the document.
-fn tokenize(bytes: &[u8], mut at: usize, lower: &mut Vec<u8>, ends: &mut Vec<u32>) -> usize {
-    lower.clear();
-    ends.clear();
-    let mut closed = 0;
+/// Finds where one document's tokens start and stop. `edges` receives the position of each
+/// change between token and separator, so tokens are its consecutive pairs. Returns the
+/// position of the LF that ends the document, which is what closes a token at the very end.
+fn find_token_edges(bytes: &[u8], mut at: usize, edges: &mut Vec<u32>) -> usize {
+    edges.clear();
+    let mut in_token = false;
     loop {
         let byte = bytes[at];
-        let token_byte = TOKEN_BYTE[byte as usize];
-        if token_byte != 0 {
-            lower.push(token_byte);
-        } else if lower.len() > closed {
-            closed = lower.len();
-            ends.push(closed as u32);
+        if IS_TOKEN[byte as usize] != in_token {
+            in_token = !in_token;
+            edges.push(at as u32);
         }
         if byte == b'\n' {
             return at;
@@ -112,20 +104,20 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         words: vec![0; plan.table.len()],
         touched: Vec::with_capacity(plan.table.len()),
     };
-    let (mut lower, mut ends, mut ids, mut anchored) = (vec![], vec![], vec![], vec![]);
+    let (mut edges, mut ids, mut anchored) = (vec![], vec![], vec![]);
     let (mut at, mut doc) = (0, 0u16);
     while at < shard.len() {
         assert!(doc != crate::eval::NEVER, "too many documents in one shard");
         let (_, tab) = parse_id(shard, at);
-        let line_end = tokenize(shard, tab + 1, &mut lower, &mut ends);
+        let line_end = find_token_edges(shard, tab + 1, &mut edges);
         at = line_end + 1;
 
         ids.clear();
         anchored.clear();
-        let mut start = 0;
-        for &end in &ends {
-            let id = plan.table.lookup(&lower[start..end as usize]);
-            start = end as usize;
+        for &[start, end] in edges.as_chunks::<2>().0 {
+            let (start, end) = (start as usize, end as usize);
+            let key = Key::at(shard, start, end - start);
+            let id = plan.table.lookup(key, &shard[start..end]);
             if id != NONE {
                 let word = &mut block.words[id as usize];
                 if *word == 0 {
