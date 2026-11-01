@@ -12,6 +12,8 @@ Every step from the reference to the final version, each with the live-board run
 | 5 | Same code in fewer lines | run-b2fced9fd22d | 0.431 | 37.5 | 607 | 63.72 |
 | 6 | Evaluate triggered queries in memory order, busiest first | run-7e6f926daaac | 0.295 | 38.6 | 636 | 67.69 |
 | 7 | Prefetch the term table's slots, one document at a time | run-a778f48fd086 | 0.294 | 40.1 | 654 | 67.64 |
+| 8 | Hash each token once, faster startup, smaller query record, words for BOOL terms only | run-39e060ff4f98 | 0.288 | 37.2 | 664 | 67.79 |
+| 9 | Profile-guided build, trained on generator output | run-4edd3e56a048 | 0.280 | 37.5 | 672 | 68.07 |
 
 ## What the data said before any code
 
@@ -92,6 +94,28 @@ Result: 17% faster in the A/B job, and 0.295 s on the board, a gain of 1.6 point
 Expected: rare tokens land on table slots that are not in cache. A document's tokens are known before any lookup, so hashing them first and prefetching their slots lets those misses overlap.
 
 Result: 4.4 to 5.5% faster in two A/B runs. On the board, 0.294 s and 67.64 points, level with step 6, because one run cannot show a 5% gain and the change added 18 lines. Kept on the strength of the A/B runs.
+
+## Step 8: a review of everything before the hot loops
+
+A separate review measured what could be removed before the scan starts, on seeds 2 and 3. Most ideas did not survive contact with the numbers: about 1% of BOOL queries are logically redundant, better covers save only 2.4% of evaluations, and only 22.6% of token hits repeat within a document. Query rewriting was not worth the code.
+
+Five small changes went through one A/B job, each on top of the last:
+
+| Change | Time vs base | This step |
+|---|---|---|
+| Compute each token's hash once | 0.982 | 1.8% faster |
+| Query record 56 to 40 bytes | 0.997 | no real change |
+| Smaller parsing table, unstable sorts | 0.969 | 2.8% faster |
+| Evaluate the busiest queries in every block | 1.001 | 3.2% slower, removed |
+| Words for BOOL terms only | 0.987 | 1.4% faster |
+
+The always-on list had been the review's first choice, on the grounds that it removes two thirds of trigger steps. It evaluates more queries than triggers do, and that cost more than the steps it saved. Its board run was `run-b3099aeb6722` at 0.300 s.
+
+## Step 9: profile-guided build
+
+Expected: evaluation is branch-heavy, so PGO should help. It gave 3.7% in the A/B job.
+
+Result: 0.280 s, the best run so far, for 8 more Dockerfile lines. The generator copy was not counted in S, as the rules promise, and the build took 40 s.
 
 ## Experiments that failed
 
