@@ -5,12 +5,16 @@ use crate::eval::{Totals, evaluate};
 use crate::queries::Compiled;
 use crate::terms::Key;
 
+/// Most chunks have fewer token edges than this, so writing this many every time means the
+/// loop that writes them rarely needs a second round.
+const EDGES_PER_ROUND: usize = 16;
+
 /// Finds where one document's tokens start and stop. `edges` receives the position of each
-/// change between token and separator, so tokens are its consecutive pairs. Returns the
-/// position of the LF that ends the document, which is what closes a token at the very end.
-fn find_token_edges(bytes: &[u8], mut at: usize, edges: &mut Vec<u32>) -> usize {
-    edges.clear();
-    let mut in_token = 0;
+/// change between token and separator, so tokens are its consecutive pairs, and it may be
+/// longer than needed. Returns the number of edges and the position of the LF that ends the
+/// document, which is what closes a token at the very end.
+fn find_token_edges(bytes: &[u8], mut at: usize, edges: &mut Vec<u32>) -> (usize, usize) {
+    let (mut n, mut in_token) = (0, 0);
     loop {
         let mut padded = [0; CHUNK];
         // Near the end of the file, a full read would run past the mapping.
@@ -26,12 +30,23 @@ fn find_token_edges(bytes: &[u8], mut at: usize, edges: &mut Vec<u32>) -> usize 
             tokens &= (1 << line_ends.trailing_zeros()) - 1;
         }
         let mut changes = tokens ^ (tokens << 1 | in_token);
-        while changes != 0 {
-            edges.push(at as u32 + changes.trailing_zeros());
-            changes &= changes - 1;
+        // Without a branch for each edge, whose count varies too much to predict. Slots past
+        // the real count get junk, which the next chunk overwrites.
+        if edges.len() < n + CHUNK + EDGES_PER_ROUND {
+            edges.resize(2 * (n + CHUNK + EDGES_PER_ROUND), 0);
         }
+        let count = changes.count_ones() as usize;
+        let mut written = 0;
+        while written < count {
+            for slot in &mut edges[n + written..][..EDGES_PER_ROUND] {
+                *slot = at as u32 + changes.trailing_zeros();
+                changes &= changes.wrapping_sub(1);
+            }
+            written += EDGES_PER_ROUND;
+        }
+        n += count;
         if line_ends != 0 {
-            return at + line_ends.trailing_zeros() as usize;
+            return (n, at + line_ends.trailing_zeros() as usize);
         }
         in_token = tokens >> (CHUNK - 1);
         at += CHUNK;
@@ -126,13 +141,13 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
     while at < shard.len() {
         assert!(doc != crate::eval::NEVER, "too many documents in one shard");
         let (_, tab) = parse_id(shard, at);
-        let line_end = find_token_edges(shard, tab + 1, &mut edges);
+        let (n_edges, line_end) = find_token_edges(shard, tab + 1, &mut edges);
         at = line_end + 1;
 
         ids.clear();
-        ids.resize(edges.len() / 2, 0);
+        ids.resize(n_edges / 2, 0);
         anchored.clear();
-        let tokens = edges.as_chunks::<2>().0;
+        let tokens = edges[..n_edges].as_chunks::<2>().0;
         keys.clear();
         for &[start, end] in tokens {
             let key = Key::at(shard, start as usize, (end - start) as usize);
