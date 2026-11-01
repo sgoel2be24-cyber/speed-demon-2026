@@ -70,6 +70,8 @@ pub struct Compiled<'a> {
     /// evaluated in nearly every block sit together in memory. Phrases follow.
     pub queries: Vec<Query>,
     pub n_bool: usize,
+    /// How many terms appear in a BOOL query. These have the lowest ids.
+    pub n_bool_terms: u32,
     /// How many of the first queries run in every block.
     pub n_always: usize,
     /// For each line of `queries.txt`, its position in `queries`.
@@ -158,15 +160,19 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
         queries.push(parse_line(line, &mut table));
     }
 
-    // Number terms from most to least used, so the busiest term words share cache lines.
+    // Number terms from most to least used, so the busiest term words share cache lines, with
+    // terms that only phrases use after the rest, because those need no word at all.
     let mut uses = vec![0u64; table.len()];
+    let mut in_bool = vec![false; table.len()];
     for query in &queries {
         for &term in &query.terms[..query.len as usize] {
             uses[term as usize] += 1;
+            in_bool[term as usize] |= !query.is_phrase;
         }
     }
     let mut by_use: Vec<u32> = (0..table.len() as u32).collect();
-    by_use.sort_unstable_by_key(|&term| (Reverse(uses[term as usize]), term));
+    by_use.sort_unstable_by_key(|&t| (!in_bool[t as usize], Reverse(uses[t as usize]), t));
+    let n_bool_terms = in_bool.iter().filter(|&&used| used).count() as u32;
     let mut new_id = vec![0u32; table.len()];
     let mut freq = vec![0u64; table.len()];
     for (new, &old) in by_use.iter().enumerate() {
@@ -217,6 +223,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
         table,
         queries,
         n_bool,
+        n_bool_terms,
         n_always,
         position_of_line,
         triggers: TermLists::build(n_terms, &cover_pairs),

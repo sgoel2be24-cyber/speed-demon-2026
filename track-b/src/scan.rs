@@ -48,7 +48,7 @@ fn parse_id(bytes: &[u8], mut at: usize) -> (u32, usize) {
     (id, at)
 }
 
-/// The terms of the current block of 64 documents. `words[t]` has bit `i` set if document
+/// The BOOL terms of the current block of 64 documents. `words[t]` has bit `i` set if document
 /// `i` of the block contains term `t`. The first `n_touched` entries of `touched` list the
 /// terms whose word is not zero. A term enters once per block at most, but every token writes
 /// to the next free entry, so `touched` needs one entry more than there are ids. `pending`
@@ -120,8 +120,8 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
     let (base, _) = parse_id(shard, 0);
     let mut totals = Totals::new(base, plan.queries.len());
     let mut block = Block {
-        words: vec![0; plan.table.len() + 1],
-        touched: vec![0; plan.table.len() + 2],
+        words: vec![0; plan.n_bool_terms as usize + 1],
+        touched: vec![0; plan.n_bool_terms as usize + 2],
         n_touched: 0,
         pending: vec![0; plan.n_bool.div_ceil(64)],
     };
@@ -149,8 +149,10 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
             let found = plan.table.lookup(home, key, &shard[start..end]);
             *id = found.id();
             // Written without branches: whether a token is new to the block is unpredictable.
-            let word = &mut block.words[found.id() as usize];
-            block.touched[block.n_touched] = found.id();
+            // Terms with no BOOL query and misses all share one word, which nothing reads.
+            let word_id = found.id().min(plan.n_bool_terms);
+            let word = &mut block.words[word_id as usize];
+            block.touched[block.n_touched] = word_id;
             block.n_touched += (*word == 0) as usize;
             *word |= 1 << (doc % 64);
             if found.is_anchor() {
