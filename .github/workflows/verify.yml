@@ -32,7 +32,9 @@ jobs:
         working-directory: verify/classify_test
         env:
           RUSTFLAGS: -C target-cpu=x86-64-v3
-        run: cargo run --release | tee /dev/stderr | grep -q "AVX2 build: true"
+        run: |
+          cargo run --release | tee result.txt
+          grep -q "AVX2 build: true" result.txt
 
       - name: Fetch the generators and the reference
         run: git clone --depth 1 https://github.com/hackathon-raptors/speed-demon-2026 contest
