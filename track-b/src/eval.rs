@@ -14,9 +14,11 @@ pub const NEVER: u16 = u16::MAX;
 /// that contain one of the query's terms.
 #[inline]
 pub fn evaluate(query: &Query, words: &[u64]) -> u64 {
-    let mut r = words[query.terms[0] as usize];
+    // SAFETY: a query's terms are all ids of BOOL terms, which index `words`.
+    let word = |term: u32| unsafe { *words.get_unchecked(term as usize) };
+    let mut r = word(query.terms[0]);
     for i in 1..query.len as usize {
-        let w = words[query.terms[i] as usize];
+        let w = word(query.terms[i]);
         r = match query.ops[i - 1] {
             Op::And => r & w,
             Op::Or => r | w,

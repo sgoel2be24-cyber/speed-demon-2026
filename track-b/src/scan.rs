@@ -140,8 +140,10 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
             // Written without branches: whether a token is new to the block is unpredictable.
             // Terms with no BOOL query and misses all share one word, which nothing reads.
             let word_id = found.id().min(plan.n_bool_terms);
-            let word = &mut block.words[word_id as usize];
-            block.touched[block.n_touched] = word_id;
+            // SAFETY: `word_id` is at most `n_bool_terms`, the last entry of `words`, and each
+            // id enters `touched` once per block, so `n_touched` stays below its length.
+            let word = unsafe { block.words.get_unchecked_mut(word_id as usize) };
+            unsafe { *block.touched.get_unchecked_mut(block.n_touched) = word_id };
             block.n_touched += (*word == 0) as usize;
             *word |= 1 << (doc % 64);
             if found.is_anchor() {

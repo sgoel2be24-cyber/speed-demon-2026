@@ -125,12 +125,14 @@ impl<'a> TermTable<'a> {
         let mask = self.slots.len() - 1;
         let mut i = home;
         loop {
-            let slot = self.slots[i];
+            // SAFETY: `home` is inside `slots` and the mask keeps `i` there, and every id in
+            // a slot indexes `keys`.
+            let slot = unsafe { *self.slots.get_unchecked(i) };
             if slot == EMPTY {
                 return i;
             }
             let id = Found(slot).id() as usize;
-            if self.keys[id] == key
+            if unsafe { *self.keys.get_unchecked(id) } == key
                 && (!key.is_long() || self.terms[id].eq_ignore_ascii_case(token))
             {
                 return i;
