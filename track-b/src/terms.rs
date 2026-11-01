@@ -120,11 +120,16 @@ impl<'a> TermTable<'a> {
         self.terms[id as usize]
     }
 
-    /// The slot holding this token, or the free slot where it belongs.
     #[inline]
-    fn find(&self, key: Key, token: &[u8]) -> usize {
+    fn home(&self, key: Key) -> usize {
+        (key.hash() >> self.shift) as usize
+    }
+
+    /// The slot holding this token, or the free slot where it belongs, starting from `home`.
+    #[inline]
+    fn find(&self, home: usize, key: Key, token: &[u8]) -> usize {
         let mask = self.slots.len() - 1;
-        let mut i = (key.hash() >> self.shift) as usize;
+        let mut i = home;
         loop {
             let slot = self.slots[i];
             if slot == EMPTY {
@@ -143,7 +148,7 @@ impl<'a> TermTable<'a> {
     /// The id of `term`, adding it if this is its first appearance.
     pub fn intern(&mut self, term: &'a [u8]) -> u32 {
         let key = Key::at(term, 0, term.len());
-        let slot = self.find(key, term);
+        let slot = self.find(self.home(key), key, term);
         if self.slots[slot] == EMPTY {
             self.slots[slot] = (self.terms.len() as u32) << 1;
             self.keys.push(key);
@@ -155,30 +160,30 @@ impl<'a> TermTable<'a> {
     /// Marks a term as the anchor of at least one phrase.
     pub fn mark_anchor(&mut self, id: u32) {
         let term = self.terms[id as usize];
-        let slot = self.find(Key::at(term, 0, term.len()), term);
+        let key = Key::at(term, 0, term.len());
+        let slot = self.find(self.home(key), key, term);
         self.slots[slot] |= 1;
     }
 
-    /// Starts loading the slot `key` hashes to. Rare tokens land on slots that are not in
-    /// cache, and a document's tokens are known in advance, so those misses can overlap.
+    /// The slot `key` hashes to, after starting to load it into the cache. Rare tokens land
+    /// on slots that are not cached, and a document's tokens are known in advance, so those
+    /// misses can overlap. Passing the slot to `lookup` saves computing the hash twice.
     #[inline]
-    pub fn prefetch(&self, key: Key) {
+    pub fn prefetch(&self, key: Key) -> usize {
+        let home = self.home(key);
         #[cfg(target_arch = "x86_64")]
-        // SAFETY: the index is a hash shifted down to the table's size, and prefetching has
-        // no effect other than on the cache.
+        // SAFETY: `home` is inside `slots`, and prefetching only affects the cache.
         unsafe {
             use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
-            let slot = self.slots.as_ptr().add((key.hash() >> self.shift) as usize);
-            _mm_prefetch::<_MM_HINT_T0>(slot.cast());
+            _mm_prefetch::<_MM_HINT_T0>(self.slots.as_ptr().add(home).cast());
         }
-        #[cfg(not(target_arch = "x86_64"))]
-        let _ = key;
+        home
     }
 
     /// What a corpus token is. A miss comes back as `miss_id()`, not anchored.
     #[inline]
-    pub fn lookup(&self, key: Key, token: &[u8]) -> Found {
-        Found(self.slots[self.find(key, token)].min(self.miss_id() << 1))
+    pub fn lookup(&self, home: usize, key: Key, token: &[u8]) -> Found {
+        Found(self.slots[self.find(home, key, token)].min(self.miss_id() << 1))
     }
 
     /// Replaces every id with `new_id[id]` and refits the slots to the real number of terms.

@@ -136,14 +136,13 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         keys.clear();
         for &[start, end] in tokens {
             let key = Key::at(shard, start as usize, (end - start) as usize);
-            plan.table.prefetch(key);
-            keys.push(key);
+            keys.push((plan.table.prefetch(key), key));
         }
-        for (position, ((id, &[start, end]), &key)) in
+        for (position, ((id, &[start, end]), &(home, key))) in
             ids.iter_mut().zip(tokens).zip(&keys).enumerate()
         {
             let (start, end) = (start as usize, end as usize);
-            let found = plan.table.lookup(key, &shard[start..end]);
+            let found = plan.table.lookup(home, key, &shard[start..end]);
             *id = found.id();
             // Written without branches: whether a token is new to the block is unpredictable.
             let word = &mut block.words[found.id() as usize];
