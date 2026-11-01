@@ -9,7 +9,9 @@ Every step from the reference to the final version, each with the live-board run
 | 2 | Term table: exact 16-byte keys, multiplicative hash, no token copies | run-258cf7536de6 | 0.437 | 37.9 | 595 | 63.63 |
 | 3 | Tokens found 32 bytes at a time with AVX2 | run-6ababf33b096 | 0.365 | 38.4 | 635 | 65.39 |
 | 4 | Lookup loop without branches: misses get their own id, the anchor flag lives in the slot | run-d4e0ab16bdba | 0.339 | 38.9 | 653 | 66.09 |
-| 5 | Same code in fewer lines | | | | | |
+| 5 | Same code in fewer lines | | 0.431 | 37.5 | 607 | 63.72 |
+| 6 | Evaluate triggered queries in memory order, busiest first | run-7e6f926daaac | 0.295 | 38.6 | 636 | 67.69 |
+| 7 | Prefetch the term table's slots, one document at a time | | | | | |
 
 ## What the data said before any code
 
@@ -60,6 +62,12 @@ Result: 0.339 s, 7% faster, 0.70 points. Worth keeping, but a smaller step than 
 
 The change also caused a bug that only the fuzz test found. Writing `touched` unconditionally means every token writes one entry past the count, so a block containing every term ran off the end of the array. Real data almost never does this, but a tiny fuzz corpus does on its second round.
 
+## Step 5: fewer lines
+
+Expected: no change in speed, about 46 fewer lines.
+
+Result: 0.431 s, far slower than step 4's 0.339 s, for code that does the same work. An A/B run on one x86 machine, alternating the two builds 20 times, put the trim at 1% slower, within noise. So one board run can be off by about a quarter, and a small difference on the board proves nothing. Changes now go through the A/B job first.
+
 ## Where the time really goes
 
 The Mac had misled us. Timing each phase on x86 with AVX2 gave a different picture from the Apple M5:
@@ -73,6 +81,24 @@ The Mac had misled us. Timing each phase on x86 with AVX2 gave a different pictu
 
 So evaluation, not lookup, is the largest phase on the machine that counts. Each evaluation reads several scattered cache lines, and the M5's large caches hide that cost. From here on, Mac timings only show whether code still works, and x86 runs choose the order of work.
 
+## Step 6: evaluate in memory order
+
+Expected: walking trigger lists jumped around memory, once per query per block. Marking queries in a bitset and then running them in order should turn scattered reads into mostly sequential ones. Sorting queries by how often they run packs the busiest together.
+
+Result: 17% faster in the A/B job, and 0.295 s on the board, a gain of 1.6 points against the best run so far.
+
+## Step 7: prefetch the term table
+
+Expected: rare tokens land on table slots that are not in cache. A document's tokens are known before any lookup, so hashing them first and prefetching their slots lets those misses overlap.
+
+Result: 4.4 to 5.5% faster in two A/B runs. Board run to come.
+
+## Experiments that failed
+
+- **Writing token edges in bulk.** Tokenising looked slow for AVX2, so the loop writing edges one at a time was replaced with one writing 16 at a time, to avoid a mispredicted exit per chunk. It came out 2% slower than without it in the A/B job, so it was reverted.
+- **Populating the file mapping up front.** The idea was that page faults were a hidden cost. No change in the A/B job, on a 2-core runner. The board has more threads, so it could still differ there.
+- **Removing the branch on each BOOL operator.** About 1% in the A/B job, within noise, so not worth the lines.
+
 ## Experiments still to try on the board
 
-- Evaluating dense queries on every block from a plain list, and removing the branch on each operator. On the Mac neither changed CPU time beyond noise, at any threshold from 6 to 64 on seeds 2 and 3, so they are out of the code for now. The M5's large caches could hide a gain the i5 would show, so they get one board run each before being dropped.
+- Evaluating dense queries on every block from a plain list. Step 6 gets much of the same effect without the extra list.
