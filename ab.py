@@ -26,7 +26,7 @@ for c in commits:
 os.makedirs("out", exist_ok=True)
 times = {c: [] for c in commits}
 hashes = set()
-for r in range(21):
+for r in range(13):
     for c in commits:
         t = time.monotonic()
         subprocess.run([bins[c], "data", "out", "4"], check=True)
