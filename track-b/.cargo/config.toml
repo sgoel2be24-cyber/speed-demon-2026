@@ -1,0 +1,4 @@
+# The scoring CPU has AVX2 but no AVX-512. Naming the level here keeps the build the same
+# on any builder, including one whose own CPU has more features than the scoring box.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64-v3"]
