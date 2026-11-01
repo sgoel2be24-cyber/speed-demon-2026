@@ -3,7 +3,7 @@
 use crate::classify::{CHUNK, classify};
 use crate::eval::{Totals, evaluate};
 use crate::queries::Compiled;
-use crate::terms::{Key, NONE};
+use crate::terms::Key;
 
 /// Finds where one document's tokens start and stop. `edges` receives the position of each
 /// change between token and separator, so tokens are its consecutive pairs. Returns the
@@ -49,17 +49,21 @@ fn parse_id(bytes: &[u8], mut at: usize) -> (u32, usize) {
 }
 
 /// The terms of the current block of 64 documents. `words[t]` has bit `i` set if document
-/// `i` of the block contains term `t`. `touched` lists the terms whose word is not zero.
+/// `i` of the block contains term `t`. The first `n_touched` entries of `touched` list the
+/// terms whose word is not zero. A term enters once per block at most, but every token writes
+/// to the next free entry, so `touched` needs one entry more than there are ids.
 struct Block {
     words: Vec<u64>,
     touched: Vec<u32>,
+    n_touched: usize,
 }
 
 impl Block {
     /// Evaluates each query that one of this block's terms can trigger, then clears the block.
     /// A query can have several terms in its cover, so `last` makes sure it runs only once.
     fn flush(&mut self, plan: &Compiled, totals: &mut Totals, block: u16) {
-        for &term in &self.touched {
+        let touched = &self.touched[..self.n_touched];
+        for &term in touched {
             for &query in plan.triggers.get(term) {
                 let q = query as usize;
                 if totals.last[q] != block {
@@ -71,10 +75,10 @@ impl Block {
                 }
             }
         }
-        for &term in &self.touched {
+        for &term in touched {
             self.words[term as usize] = 0;
         }
-        self.touched.clear();
+        self.n_touched = 0;
     }
 }
 
@@ -104,8 +108,9 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
     let (base, _) = parse_id(shard, 0);
     let mut totals = Totals::new(base, plan.queries.len());
     let mut block = Block {
-        words: vec![0; plan.table.len()],
-        touched: Vec::with_capacity(plan.table.len()),
+        words: vec![0; plan.table.len() + 1],
+        touched: vec![0; plan.table.len() + 2],
+        n_touched: 0,
     };
     let (mut edges, mut ids, mut anchored) = (vec![], vec![], vec![]);
     let (mut at, mut doc) = (0, 0u16);
@@ -116,22 +121,22 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         at = line_end + 1;
 
         ids.clear();
+        ids.resize(edges.len() / 2, 0);
         anchored.clear();
-        for &[start, end] in edges.as_chunks::<2>().0 {
+        let tokens = edges.as_chunks::<2>().0;
+        for (position, (id, &[start, end])) in ids.iter_mut().zip(tokens).enumerate() {
             let (start, end) = (start as usize, end as usize);
             let key = Key::at(shard, start, end - start);
-            let id = plan.table.lookup(key, &shard[start..end]);
-            if id != NONE {
-                let word = &mut block.words[id as usize];
-                if *word == 0 {
-                    block.touched.push(id);
-                }
-                *word |= 1 << (doc % 64);
-                if plan.anchors.has(id) {
-                    anchored.push(ids.len());
-                }
+            let found = plan.table.lookup(key, &shard[start..end]);
+            *id = found.id();
+            // Written without branches: whether a token is new to the block is unpredictable.
+            let word = &mut block.words[found.id() as usize];
+            block.touched[block.n_touched] = found.id();
+            block.n_touched += (*word == 0) as usize;
+            *word |= 1 << (doc % 64);
+            if found.is_anchor() {
+                anchored.push(position);
             }
-            ids.push(id);
         }
         for &position in &anchored {
             check_phrases(plan, &ids, position, doc, &mut totals);

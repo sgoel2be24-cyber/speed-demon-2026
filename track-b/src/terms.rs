@@ -1,12 +1,8 @@
 //! The table of query terms. A corpus token that no query uses is a miss, so nothing is
 //! ever stored for it.
 
-/// The id of a token that is not a query term. No query holds this id, so a phrase
-/// comparison can never match across a miss.
-pub const NONE: u32 = u32::MAX;
-
-/// A free slot. It equals `NONE`, so a lookup that ends on a free slot reports a miss.
-const EMPTY: u32 = NONE;
+/// A free slot.
+const EMPTY: u32 = u32::MAX;
 
 /// The last key byte of a token over 16 bytes. No token byte has this value, so a long token
 /// can never equal a shorter token that shares its first bytes.
@@ -62,12 +58,32 @@ impl Key {
     }
 }
 
+/// A term id with one more bit, kept together because the scan needs both for every token.
+#[derive(Clone, Copy)]
+pub struct Found(u32);
+
+impl Found {
+    #[inline]
+    pub fn id(self) -> u32 {
+        self.0 >> 1
+    }
+
+    /// Whether some phrase is anchored on this term.
+    #[inline]
+    pub fn is_anchor(self) -> bool {
+        self.0 & 1 == 1
+    }
+}
+
 /// Open-addressing hash table from term bytes to a dense id.
 ///
 /// A slot only says where to look. Keys live in a separate array indexed by id, so with ids
 /// in order of use the busiest keys share cache lines. Every hit is an exact comparison: the
 /// corpus holds about 600,000 distinct tokens, so accepting a mere hash match would change
 /// an answer sooner or later.
+///
+/// A slot holds a `Found`. Tokens that are not query terms get the id `miss_id()`, one past
+/// the last term, so the scan treats them like any term and needs no branch for them.
 pub struct TermTable<'a> {
     slots: Vec<u32>,
     keys: Vec<Key>,
@@ -99,6 +115,11 @@ impl<'a> TermTable<'a> {
         self.terms.len()
     }
 
+    /// The id every miss gets. No query holds it, so a phrase can never match across a miss.
+    pub fn miss_id(&self) -> u32 {
+        self.terms.len() as u32
+    }
+
     pub fn term(&self, id: u32) -> &'a [u8] {
         self.terms[id as usize]
     }
@@ -109,12 +130,13 @@ impl<'a> TermTable<'a> {
         let mask = self.slots.len() - 1;
         let mut i = (key.hash() >> self.shift) as usize;
         loop {
-            let id = self.slots[i];
-            if id == EMPTY {
+            let slot = self.slots[i];
+            if slot == EMPTY {
                 return i;
             }
-            if self.keys[id as usize] == key
-                && (!key.is_long() || self.terms[id as usize].eq_ignore_ascii_case(token))
+            let id = Found(slot).id() as usize;
+            if self.keys[id] == key
+                && (!key.is_long() || self.terms[id].eq_ignore_ascii_case(token))
             {
                 return i;
             }
@@ -127,17 +149,24 @@ impl<'a> TermTable<'a> {
         let key = Key::at(term, 0, term.len());
         let slot = self.find(key, term);
         if self.slots[slot] == EMPTY {
-            self.slots[slot] = self.terms.len() as u32;
+            self.slots[slot] = (self.terms.len() as u32) << 1;
             self.keys.push(key);
             self.terms.push(term);
         }
-        self.slots[slot]
+        Found(self.slots[slot]).id()
     }
 
-    /// The id of a corpus token, or `NONE` when no query uses it.
+    /// Marks a term as the anchor of at least one phrase.
+    pub fn mark_anchor(&mut self, id: u32) {
+        let term = self.terms[id as usize];
+        let slot = self.find(Key::at(term, 0, term.len()), term);
+        self.slots[slot] |= 1;
+    }
+
+    /// What a corpus token is. A miss comes back as `miss_id()`, not anchored.
     #[inline]
-    pub fn lookup(&self, key: Key, token: &[u8]) -> u32 {
-        self.slots[self.find(key, token)]
+    pub fn lookup(&self, key: Key, token: &[u8]) -> Found {
+        Found(self.slots[self.find(key, token)].min(self.miss_id() << 1))
     }
 
     /// Replaces every id with `new_id[id]` and refits the slots to the real number of terms.

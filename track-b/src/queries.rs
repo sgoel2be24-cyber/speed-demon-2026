@@ -60,12 +60,6 @@ impl<T: Copy> TermLists<T> {
         let t = term as usize;
         &self.items[self.offsets[t] as usize..self.offsets[t + 1] as usize]
     }
-
-    #[inline]
-    pub fn has(&self, term: u32) -> bool {
-        let t = term as usize;
-        self.offsets[t] != self.offsets[t + 1]
-    }
 }
 
 /// Everything the scan needs to know about the queries.
@@ -198,11 +192,13 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
                 at: at as u32,
             };
             anchor_pairs.push((query.terms[at], anchor));
+            table.mark_anchor(query.terms[at]);
         } else {
             push_cover(query, i as u32, &freq, &mut cover_pairs);
         }
     }
-    let n_terms = table.len();
+    // One more list than terms, always empty, for the id that misses get.
+    let n_terms = table.len() + 1;
     Compiled {
         table,
         queries,
