@@ -2,6 +2,7 @@
 //! to be looked at during the scan.
 
 use crate::terms::TermTable;
+use std::cmp::Reverse;
 
 /// The spec's limit: a phrase has up to 8 terms, a BOOL query up to 6.
 pub const MAX_TERMS: usize = 8;
@@ -158,7 +159,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
         }
     }
     let mut by_use: Vec<u32> = (0..table.len() as u32).collect();
-    by_use.sort_by_key(|&term| std::cmp::Reverse(uses[term as usize]));
+    by_use.sort_unstable_by_key(|&term| (Reverse(uses[term as usize]), term));
     let mut new_id = vec![0u32; table.len()];
     let mut freq = vec![0u64; table.len()];
     for (new, &old) in by_use.iter().enumerate() {
@@ -187,7 +188,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     }
 
     let mut lines: Vec<u32> = (0..queries.len() as u32).collect();
-    lines.sort_by_key(|&line| std::cmp::Reverse(evaluations[line as usize]));
+    lines.sort_unstable_by_key(|&line| (Reverse(evaluations[line as usize]), line));
     let mut position_of_line = vec![0; lines.len()];
     for (position, &line) in lines.iter().enumerate() {
         position_of_line[line as usize] = position as u32;

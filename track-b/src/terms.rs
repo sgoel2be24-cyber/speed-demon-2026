@@ -93,16 +93,17 @@ pub struct TermTable<'a> {
 }
 
 impl<'a> TermTable<'a> {
-    /// `max_terms` bounds the number of distinct terms.
+    /// `max_terms` bounds the number of distinct terms. This table only has to survive parsing,
+    /// and `renumber` refits it, so it stays small enough not to cost cache misses of its own.
     pub fn with_capacity(max_terms: usize) -> Self {
         let mut table = Self::default();
-        table.reset_slots(max_terms);
+        table.reset_slots(max_terms + 1);
         table
     }
 
-    /// Empties the slots, sized to stay at most a third full with `terms` terms.
-    fn reset_slots(&mut self, terms: usize) {
-        let size = (terms * 3).max(2).next_power_of_two();
+    /// Empties the slots, making room for at least `size`.
+    fn reset_slots(&mut self, size: usize) {
+        let size = size.max(2).next_power_of_two();
         self.slots = vec![EMPTY; size];
         self.shift = 64 - size.trailing_zeros();
     }
@@ -193,7 +194,7 @@ impl<'a> TermTable<'a> {
         let mut order: Vec<usize> = (0..old_terms.len()).collect();
         order.sort_by_key(|&old| new_id[old]);
         self.keys.clear();
-        self.reset_slots(old_terms.len());
+        self.reset_slots(old_terms.len() * 3);
         for old in order {
             self.intern(old_terms[old]);
         }
