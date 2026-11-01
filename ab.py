@@ -2,11 +2,27 @@
 import hashlib, os, statistics, subprocess, time
 commits = open("ab.txt").read().split()
 bins = {}
+SYS = subprocess.run(["rustc", "--print", "sysroot"], capture_output=True, text=True).stdout.strip()
+PROFDATA = f"{SYS}/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"
+if any(c.endswith(":pgo") for c in commits):
+    subprocess.run(["rustup", "component", "add", "llvm-tools"], check=True)
+    subprocess.run(["python", "contest/generators/b_index.py", "--seed", "7", "--scale", "sample", "--out", "train"], check=True)
 for c in commits:
-    w = f"wt-{c[:8]}"
-    subprocess.run(["git", "worktree", "add", "-q", w, c], check=True)
-    subprocess.run(["cargo", "build", "--release", "--manifest-path", f"{w}/track-b/Cargo.toml"], check=True, capture_output=True)
-    bins[c] = f"{w}/track-b/target/release/solution"
+    sha = c.split(":")[0]
+    w = f"wt-{c.replace(':', '-')[:12]}"
+    subprocess.run(["git", "worktree", "add", "-q", "--detach", w, sha], check=True)
+    d = os.path.abspath(f"{w}/track-b")
+    if c.endswith(":pgo"):
+        prof = os.path.abspath(f"pgo-{sha[:7]}")
+        subprocess.run(["cargo", "rustc", "--release", "--", "-C", f"profile-generate={prof}"], cwd=d, check=True, capture_output=True)
+        os.makedirs("trainout", exist_ok=True)
+        subprocess.run([f"{d}/target/release/solution", "train", "trainout", "12"], check=True)
+        subprocess.run([PROFDATA, "merge", "-o", f"{prof}.profdata", prof], check=True)
+        subprocess.run(["touch", f"{d}/src/main.rs"], check=True)
+        subprocess.run(["cargo", "rustc", "--release", "--", "-C", f"profile-use={prof}.profdata"], cwd=d, check=True, capture_output=True)
+    else:
+        subprocess.run(["cargo", "build", "--release"], cwd=d, check=True, capture_output=True)
+    bins[c] = f"{d}/target/release/solution"
 os.makedirs("out", exist_ok=True)
 times = {c: [] for c in commits}
 hashes = set()
