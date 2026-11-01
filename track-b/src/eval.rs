@@ -51,7 +51,7 @@ fn sum_of_bit_positions(word: u64) -> u32 {
 pub struct Totals {
     /// The id of the shard's first document.
     pub base: u32,
-    /// For a BOOL query the last block evaluated, for a phrase the last document counted.
+    /// For a phrase, the last document counted.
     pub last: Vec<u16>,
     pub count: Vec<u16>,
     pub sum: Vec<u32>,

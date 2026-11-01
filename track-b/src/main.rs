@@ -84,6 +84,6 @@ fn main() -> io::Result<()> {
             .collect()
     });
 
-    let results = output::format_results(&totals, plan.queries.len());
+    let results = output::format_results(&totals, &plan.position_of_line);
     fs::write(out.join("results.txt"), results)
 }

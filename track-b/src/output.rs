@@ -3,11 +3,12 @@
 use crate::eval::{MAX_IDS, Totals};
 use std::fmt::Write;
 
-/// One line per query, in query order. Shards are in document order, so taking ids from them
-/// in turn gives the smallest ids, ascending.
-pub fn format_results(shards: &[Totals], n_queries: usize) -> String {
-    let mut out = String::with_capacity(n_queries * 32);
-    for q in 0..n_queries {
+/// One line per query, in the order of `queries.txt`. Shards are in document order, so taking
+/// ids from them in turn gives the smallest ids, ascending.
+pub fn format_results(shards: &[Totals], position_of_line: &[u32]) -> String {
+    let mut out = String::with_capacity(position_of_line.len() * 32);
+    for &position in position_of_line {
+        let q = position as usize;
         let mut count = 0u64;
         let mut sum = 0u64;
         for shard in shards {

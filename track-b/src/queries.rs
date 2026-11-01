@@ -60,7 +60,12 @@ impl<T: Copy> TermLists<T> {
 /// Everything the scan needs to know about the queries.
 pub struct Compiled<'a> {
     pub table: TermTable<'a>,
+    /// The queries, BOOL first, then from the most often evaluated to the least, so the ones
+    /// evaluated in nearly every block sit together in memory. Phrases follow.
     pub queries: Vec<Query>,
+    pub n_bool: usize,
+    /// For each line of `queries.txt`, its position in `queries`.
+    pub position_of_line: Vec<u32>,
     /// For each term, the BOOL queries to evaluate in a block where the term occurs.
     pub triggers: TermLists<u32>,
     /// For each term, the phrases to check at each of its occurrences, as the query and the
@@ -167,20 +172,42 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
 
     let mut cover_pairs = Vec::new();
     let mut anchor_pairs = Vec::new();
-    for (i, query) in queries.iter().enumerate() {
+    let mut evaluations = vec![0; queries.len()];
+    for (line, query) in queries.iter().enumerate() {
         if query.is_phrase {
             let at = pick_anchor(query, &table, &freq);
-            anchor_pairs.push((query.terms[at], (i as u32, at as u32)));
+            anchor_pairs.push((query.terms[at], (line as u32, at as u32)));
             table.mark_anchor(query.terms[at]);
         } else {
-            push_cover(query, i as u32, &freq, &mut cover_pairs);
+            let start = cover_pairs.len();
+            push_cover(query, line as u32, &freq, &mut cover_pairs);
+            let cover = &cover_pairs[start..];
+            evaluations[line] = cover.iter().map(|p| freq[p.0 as usize]).sum::<u64>() + 1;
         }
     }
+
+    let mut lines: Vec<u32> = (0..queries.len() as u32).collect();
+    lines.sort_by_key(|&line| std::cmp::Reverse(evaluations[line as usize]));
+    let mut position_of_line = vec![0; lines.len()];
+    for (position, &line) in lines.iter().enumerate() {
+        position_of_line[line as usize] = position as u32;
+    }
+    let n_bool = evaluations.iter().filter(|&&e| e > 0).count();
+    let queries = lines.iter().map(|&line| queries[line as usize]).collect();
+    for pair in &mut cover_pairs {
+        pair.1 = position_of_line[pair.1 as usize];
+    }
+    for pair in &mut anchor_pairs {
+        pair.1.0 = position_of_line[pair.1.0 as usize];
+    }
+
     // One more list than terms, always empty, for the id that misses get.
     let n_terms = table.len() + 1;
     Compiled {
         table,
         queries,
+        n_bool,
+        position_of_line,
         triggers: TermLists::build(n_terms, &cover_pairs),
         anchors: TermLists::build(n_terms, &anchor_pairs),
     }

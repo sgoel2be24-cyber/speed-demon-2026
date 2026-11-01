@@ -51,27 +51,36 @@ fn parse_id(bytes: &[u8], mut at: usize) -> (u32, usize) {
 /// The terms of the current block of 64 documents. `words[t]` has bit `i` set if document
 /// `i` of the block contains term `t`. The first `n_touched` entries of `touched` list the
 /// terms whose word is not zero. A term enters once per block at most, but every token writes
-/// to the next free entry, so `touched` needs one entry more than there are ids.
+/// to the next free entry, so `touched` needs one entry more than there are ids. `pending`
+/// is a bitset of BOOL queries, kept here so that a flush needs no allocation.
 struct Block {
     words: Vec<u64>,
     touched: Vec<u32>,
     n_touched: usize,
+    pending: Vec<u64>,
 }
 
 impl Block {
     /// Evaluates each query that one of this block's terms can trigger, then clears the block.
-    /// A query can have several terms in its cover, so `last` makes sure it runs only once.
+    ///
+    /// Marking the queries in a bitset first means a query with several cover terms runs only
+    /// once, and they run in memory order. A flush evaluates thousands of queries, each
+    /// touching several arrays, and reading those in order is what keeps the cache misses down.
     fn flush(&mut self, plan: &Compiled, totals: &mut Totals, block: u16) {
         let touched = &self.touched[..self.n_touched];
         for &term in touched {
             for &query in plan.triggers.get(term) {
-                let q = query as usize;
-                if totals.last[q] != block {
-                    totals.last[q] = block;
-                    let result = evaluate(&plan.queries[q], &self.words);
-                    if result != 0 {
-                        totals.add_word(q, result, block as u32 * 64);
-                    }
+                self.pending[query as usize / 64] |= 1 << (query % 64);
+            }
+        }
+        for (i, pending) in self.pending.iter_mut().enumerate() {
+            let mut queries = std::mem::take(pending);
+            while queries != 0 {
+                let q = i * 64 + queries.trailing_zeros() as usize;
+                queries &= queries - 1;
+                let result = evaluate(&plan.queries[q], &self.words);
+                if result != 0 {
+                    totals.add_word(q, result, block as u32 * 64);
                 }
             }
         }
@@ -110,6 +119,7 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         words: vec![0; plan.table.len() + 1],
         touched: vec![0; plan.table.len() + 2],
         n_touched: 0,
+        pending: vec![0; plan.n_bool.div_ceil(64)],
     };
     let (mut edges, mut ids, mut anchored) = (vec![], vec![], vec![]);
     let (mut at, mut doc) = (0, 0u16);
