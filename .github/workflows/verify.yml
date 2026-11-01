@@ -1,51 +1,22 @@
-# Runs the code paths a Mac cannot run: the AVX2 build, on real x86-64, against seeds the
-# board never uses. Lives outside track-b/, so it adds nothing to the entry's source size.
+# A/B timing on one x86 machine. Lives only on the ab branch.
 name: verify
-
 on:
   push:
-    paths-ignore:
-      - "**.md"
-  workflow_dispatch:
-
 jobs:
-  x86:
+  ab:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-
-      - name: Show the CPU has AVX2
-        run: grep -m1 -o avx2 /proc/cpuinfo
-
-      - name: Install the pinned toolchain
-        run: |
+      - run: lscpu | grep -E 'Model name|^CPU\(s\)'
+      - run: |
           rustup toolchain install 1.99.1 --profile minimal
           rustup default 1.99.1
-
-      - name: Build
-        run: cargo build --release --manifest-path track-b/Cargo.toml
-
-      - name: Prove the AVX2 classifier correct for every byte
-        working-directory: verify/classify_test
-        env:
-          RUSTFLAGS: -C target-cpu=x86-64-v3
-        run: |
-          cargo run --release | tee result.txt
-          grep -q "AVX2 build: true" result.txt
-
-      - name: Fetch the generators and the reference
-        run: git clone --depth 1 https://github.com/hackathon-raptors/speed-demon-2026 contest
-
-      - name: Generate data and reference answers
-        run: bash verify/generate.sh contest data python
-
-      - name: Compare with the reference on every seed
-        run: python verify/levels.py --data data --levels 0,1,2,3,4,5,7
-
-      - name: Fuzz
-        run: python verify/fuzz.py --reference contest/reference/b_index.py --rounds 300
+      - run: git clone --depth 1 https://github.com/hackathon-raptors/speed-demon-2026 contest
+      - run: python contest/generators/b_index.py --seed 2 --scale full --out data
+      - run: python ab.py
