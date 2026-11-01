@@ -4,6 +4,8 @@ name: verify
 
 on:
   push:
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
 
 jobs:

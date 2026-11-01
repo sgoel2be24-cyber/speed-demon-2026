@@ -8,6 +8,7 @@ Every step from the reference to the final version, each with the live-board run
 | 1 | One pass with no index: scalar tokeniser, byte-hash term table, 64-document blocks | | | | | |
 | 2 | Term table: exact 16-byte keys, multiplicative hash, no token copies | | | | | |
 | 3 | Tokens found 32 bytes at a time with AVX2 | | | | | |
+| 4 | Lookup loop without branches: misses get their own id, the anchor flag lives in the slot | | | | | |
 
 ## What the data said before any code
 
@@ -44,4 +45,20 @@ Expected: tokenising was 27% of scan CPU, nearly all of it byte-by-byte work tha
 
 Measured before pushing, on the Apple M5, which uses the plain classifier and so does not show the AVX2 gain: CPU time fell a further 13%, to 1.45 s, just from working on whole chunks.
 
+On a GitHub x86-64 runner with AVX2, steps 2 and 3 together took `full` seed 1 from 2.71 s to 1.25 s. That is a slow shared machine, so the ratio matters, not the time. Measured on x86, the gain is much larger than the Mac suggested.
+
 Result: to be filled in from the board run.
+
+## Step 4: lookup without branches
+
+Expected: lookup was still the largest phase. Whether a token is a hit, and whether it is new to the block, are both close to coin flips for the branch predictor, and checking for anchors read a second table.
+
+Measured before pushing, on the Apple M5: CPU time fell from 1.45 s to 1.29 s, and wall time to 0.16 s.
+
+Result: to be filled in from the board run.
+
+The change also caused a bug that only the fuzz test found. Writing `touched` unconditionally means every token writes one entry past the count, so a block containing every term ran off the end of the array. Real data almost never does this, but a tiny fuzz corpus does on its second round.
+
+## Experiments still to try on the board
+
+- Evaluating dense queries on every block from a plain list, and removing the branch on each operator. On the Mac neither changed CPU time beyond noise, at any threshold from 6 to 64 on seeds 2 and 3, so they are out of the code for now. The M5's large caches could hide a gain the i5 would show, so they get one board run each before being dropped.
