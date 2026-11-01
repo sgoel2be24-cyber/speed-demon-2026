@@ -159,6 +159,22 @@ impl<'a> TermTable<'a> {
         self.slots[slot] |= 1;
     }
 
+    /// Starts loading the slot `key` hashes to. Rare tokens land on slots that are not in
+    /// cache, and a document's tokens are known in advance, so those misses can overlap.
+    #[inline]
+    pub fn prefetch(&self, key: Key) {
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: the index is a hash shifted down to the table's size, and prefetching has
+        // no effect other than on the cache.
+        unsafe {
+            use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+            let slot = self.slots.as_ptr().add((key.hash() >> self.shift) as usize);
+            _mm_prefetch::<_MM_HINT_T0>(slot.cast());
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = key;
+    }
+
     /// What a corpus token is. A miss comes back as `miss_id()`, not anchored.
     #[inline]
     pub fn lookup(&self, key: Key, token: &[u8]) -> Found {

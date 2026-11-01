@@ -121,7 +121,7 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         n_touched: 0,
         pending: vec![0; plan.n_bool.div_ceil(64)],
     };
-    let (mut edges, mut ids, mut anchored) = (vec![], vec![], vec![]);
+    let (mut edges, mut ids, mut anchored, mut keys) = (vec![], vec![], vec![], vec![]);
     let (mut at, mut doc) = (0, 0u16);
     while at < shard.len() {
         assert!(doc != crate::eval::NEVER, "too many documents in one shard");
@@ -133,9 +133,16 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         ids.resize(edges.len() / 2, 0);
         anchored.clear();
         let tokens = edges.as_chunks::<2>().0;
-        for (position, (id, &[start, end])) in ids.iter_mut().zip(tokens).enumerate() {
+        keys.clear();
+        for &[start, end] in tokens {
+            let key = Key::at(shard, start as usize, (end - start) as usize);
+            plan.table.prefetch(key);
+            keys.push(key);
+        }
+        for (position, ((id, &[start, end]), &key)) in
+            ids.iter_mut().zip(tokens).zip(&keys).enumerate()
+        {
             let (start, end) = (start as usize, end as usize);
-            let key = Key::at(shard, start, end - start);
             let found = plan.table.lookup(key, &shard[start..end]);
             *id = found.id();
             // Written without branches: whether a token is new to the block is unpredictable.
