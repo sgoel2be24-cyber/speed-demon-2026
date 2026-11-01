@@ -8,6 +8,20 @@ const EMPTY: u32 = u32::MAX;
 /// can never equal a shorter token that shares its first bytes.
 const LONG: u64 = 0xFF << 56;
 
+/// Bytes of the key's two words that a token of each length keeps, and the mark to add.
+const KEEP: [[u64; 3]; 18] = {
+    let mut keep = [[0; 3]; 18];
+    let mut len: usize = 1;
+    while len <= 16 {
+        let (low, high) = (if len < 8 { len } else { 8 }, len.saturating_sub(8));
+        keep[len][0] = if low == 8 { !0 } else { (1 << (low * 8)) - 1 };
+        keep[len][1] = if high == 8 { !0 } else { (1 << (high * 8)) - 1 };
+        len += 1;
+    }
+    keep[17] = [!0, !0 >> 8, LONG];
+    keep
+};
+
 /// The first bytes of a token, lowercase and zero-padded. No token holds a zero byte, so for
 /// tokens of up to 16 bytes two equal keys mean two equal tokens, with no further comparison.
 #[derive(Clone, Copy, PartialEq)]
@@ -27,15 +41,8 @@ impl Key {
         }
         let [low, high] = [&window[..8], &window[8..]]
             .map(|half| u64::from_le_bytes(half.try_into().expect("8 bytes")) | LOWERCASE);
-        // Keep the token's own bytes and clear those after it.
-        let keep_high = u64::MAX
-            .checked_shr(128 - 8 * len.clamp(8, 16) as u32)
-            .unwrap_or(0);
-        let mark = if len > 16 { LONG } else { 0 };
-        Key([
-            low & (u64::MAX >> (64 - 8 * len.min(8) as u32)),
-            (high & keep_high & !mark) | mark,
-        ])
+        let [keep_low, keep_high, mark] = KEEP[len.min(17)];
+        Key([low & keep_low, (high & keep_high) | mark])
     }
 
     #[inline]

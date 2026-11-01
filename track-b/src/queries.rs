@@ -76,6 +76,15 @@ pub struct Compiled<'a> {
     pub anchors: TermLists<(u32, u32)>,
 }
 
+fn parse_op(word: &[u8]) -> Op {
+    match word {
+        b"AND" => Op::And,
+        b"OR" => Op::Or,
+        b"NOT" => Op::Not,
+        _ => panic!("unknown operator {:?}", String::from_utf8_lossy(word)),
+    }
+}
+
 /// Reads one line by position: `and`, `or` and `not` are ordinary terms wherever a term is
 /// expected, so a word is an operator only because of where it stands. Only a phrase has
 /// quotes, and they cannot appear anywhere else.
@@ -93,11 +102,7 @@ fn parse_line<'a>(line: &'a [u8], table: &mut TermTable<'a>) -> Query {
             query.terms[query.len as usize] = table.intern(word);
             query.len += 1;
         } else {
-            query.ops[query.len as usize - 1] = match word[0] {
-                b'A' => Op::And,
-                b'O' => Op::Or,
-                _ => Op::Not,
-            };
+            query.ops[query.len as usize - 1] = parse_op(word);
         }
     }
     query

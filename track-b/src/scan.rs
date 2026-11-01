@@ -38,6 +38,16 @@ fn find_token_edges(bytes: &[u8], mut at: usize, edges: &mut Vec<u32>) -> usize 
     }
 }
 
+/// Parses the decimal id at the start of a line. Returns the id and the position of its TAB.
+fn parse_id(bytes: &[u8], mut at: usize) -> (u32, usize) {
+    let mut id = 0;
+    while bytes[at] != b'\t' {
+        id = id * 10 + (bytes[at] - b'0') as u32;
+        at += 1;
+    }
+    (id, at)
+}
+
 /// The BOOL terms of the current block of 64 documents. `words[t]` has bit `i` set if document
 /// `i` of the block contains term `t`. The first `n_touched` entries of `touched` list the
 /// terms whose word is not zero. A term enters once per block at most, but every token writes
@@ -103,8 +113,7 @@ fn check_phrases(plan: &Compiled, ids: &[u32], at: usize, doc: u16, totals: &mut
 /// `shard` must end just after an LF. Local document numbers stay below `NEVER`, which is
 /// checked: at 250,000 documents and at least 12 shards they are around 21,000.
 pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
-    let base_digits = shard.iter().take_while(|&&b| b != b'\t');
-    let base = base_digits.fold(0, |id, &b| id * 10 + (b - b'0') as u32);
+    let (base, _) = parse_id(shard, 0);
     let mut totals = Totals::new(base, plan.queries.len());
     let mut block = Block {
         words: vec![0; plan.n_bool_terms as usize + 1],
@@ -116,7 +125,7 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
     let (mut at, mut doc) = (0, 0u16);
     while at < shard.len() {
         assert!(doc != crate::eval::NEVER, "too many documents in one shard");
-        let tab = at + shard[at..].iter().position(|&b| b == b'\t').expect("a TAB");
+        let (_, tab) = parse_id(shard, at);
         let line_end = find_token_edges(shard, tab + 1, &mut edges);
         at = line_end + 1;
 
