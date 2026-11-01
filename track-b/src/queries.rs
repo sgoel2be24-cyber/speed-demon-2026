@@ -19,8 +19,8 @@ pub enum Op {
 #[derive(Clone, Copy, Default)]
 pub struct Query {
     pub terms: [u32; MAX_TERMS],
-    pub ops: [Op; MAX_TERMS],
-    pub len: usize,
+    pub ops: [Op; 6],
+    pub len: u8,
     pub is_phrase: bool,
 }
 
@@ -96,10 +96,10 @@ fn parse_line<'a>(line: &'a [u8], table: &mut TermTable<'a>) -> Query {
     };
     for (i, word) in body.split(|&b| b == b' ').enumerate() {
         if query.is_phrase || i % 2 == 0 {
-            query.terms[query.len] = table.intern(word);
+            query.terms[query.len as usize] = table.intern(word);
             query.len += 1;
         } else {
-            query.ops[query.len - 1] = parse_op(word);
+            query.ops[query.len as usize - 1] = parse_op(word);
         }
     }
     query
@@ -115,7 +115,7 @@ fn parse_line<'a>(line: &'a [u8], table: &mut TermTable<'a>) -> Query {
 fn push_cover(query: &Query, index: u32, freq: &[u64], pairs: &mut Vec<(u32, u32)>) {
     let start = pairs.len();
     pairs.push((query.terms[0], index));
-    for i in 1..query.len {
+    for i in 1..query.len as usize {
         let term = query.terms[i];
         match query.ops[i - 1] {
             Op::And => {
@@ -134,7 +134,7 @@ fn push_cover(query: &Query, index: u32, freq: &[u64], pairs: &mut Vec<(u32, u32
 /// The phrase term to anchor on. Any term is correct, so this only affects speed. How often
 /// a term appears in `queries.txt` is a good, free guide to how rare it is in the corpus.
 fn pick_anchor(query: &Query, table: &TermTable, freq: &[u64]) -> usize {
-    (0..query.len)
+    (0..query.len as usize)
         .min_by_key(|&i| {
             let term = query.terms[i];
             (freq[term as usize], usize::MAX - table.term(term).len())
@@ -153,7 +153,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     // Number terms from most to least used, so the busiest term words share cache lines.
     let mut uses = vec![0u64; table.len()];
     for query in &queries {
-        for &term in &query.terms[..query.len] {
+        for &term in &query.terms[..query.len as usize] {
             uses[term as usize] += 1;
         }
     }

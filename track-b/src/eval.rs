@@ -15,7 +15,7 @@ pub const NEVER: u16 = u16::MAX;
 #[inline]
 pub fn evaluate(query: &Query, words: &[u64]) -> u64 {
     let mut r = words[query.terms[0] as usize];
-    for i in 1..query.len {
+    for i in 1..query.len as usize {
         let w = words[query.terms[i] as usize];
         r = match query.ops[i - 1] {
             Op::And => r & w,
