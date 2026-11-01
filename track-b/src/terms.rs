@@ -58,20 +58,6 @@ impl Key {
     }
 }
 
-/// Starts loading `item` into the cache. A document's tokens are known before any of them is
-/// looked up, so the cache misses of rare tokens can overlap instead of waiting in turn.
-#[inline]
-pub fn prefetch<T>(item: &T) {
-    #[cfg(target_arch = "x86_64")]
-    // SAFETY: a reference is a valid address, and prefetching only affects the cache.
-    unsafe {
-        use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
-        _mm_prefetch::<_MM_HINT_T0>((item as *const T).cast());
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    let _ = item;
-}
-
 /// A term id with one more bit, kept together because the scan needs both for every token.
 #[derive(Clone, Copy)]
 pub struct Found(u32);
@@ -173,10 +159,20 @@ impl<'a> TermTable<'a> {
         self.slots[slot] |= 1;
     }
 
-    /// Starts loading the slot `key` hashes to.
+    /// Starts loading the slot `key` hashes to. Rare tokens land on slots that are not in
+    /// cache, and a document's tokens are known in advance, so those misses can overlap.
     #[inline]
     pub fn prefetch(&self, key: Key) {
-        prefetch(&self.slots[(key.hash() >> self.shift) as usize]);
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: the index is a hash shifted down to the table's size, and prefetching has
+        // no effect other than on the cache.
+        unsafe {
+            use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+            let slot = self.slots.as_ptr().add((key.hash() >> self.shift) as usize);
+            _mm_prefetch::<_MM_HINT_T0>(slot.cast());
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = key;
     }
 
     /// What a corpus token is. A miss comes back as `miss_id()`, not anchored.

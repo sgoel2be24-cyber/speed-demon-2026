@@ -3,7 +3,7 @@
 use crate::classify::{CHUNK, classify};
 use crate::eval::{Totals, evaluate};
 use crate::queries::Compiled;
-use crate::terms::{Key, prefetch};
+use crate::terms::Key;
 
 /// Finds where one document's tokens start and stop. `edges` receives the position of each
 /// change between token and separator, so tokens are its consecutive pairs. Returns the
@@ -145,17 +145,14 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
             let (start, end) = (start as usize, end as usize);
             let found = plan.table.lookup(key, &shard[start..end]);
             *id = found.id();
-            prefetch(&block.words[found.id() as usize]);
+            // Written without branches: whether a token is new to the block is unpredictable.
+            let word = &mut block.words[found.id() as usize];
+            block.touched[block.n_touched] = found.id();
+            block.n_touched += (*word == 0) as usize;
+            *word |= 1 << (doc % 64);
             if found.is_anchor() {
                 anchored.push(position);
             }
-        }
-        // Written without branches: whether a token is new to the block is unpredictable.
-        for &id in &ids {
-            let word = &mut block.words[id as usize];
-            block.touched[block.n_touched] = id;
-            block.n_touched += (*word == 0) as usize;
-            *word |= 1 << (doc % 64);
         }
         for &position in &anchored {
             check_phrases(plan, &ids, position, doc, &mut totals);
