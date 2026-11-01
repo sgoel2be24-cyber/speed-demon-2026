@@ -53,7 +53,7 @@ Result: to be filled in from the board run.
 
 Expected: lookup was still the largest phase. Whether a token is a hit, and whether it is new to the block, are both close to coin flips for the branch predictor, and checking for anchors read a second table.
 
-Measured before pushing, on the Apple M5: CPU time fell from 1.45 s to 1.29 s, and wall time to 0.16 s.
+Measured before pushing, on the Apple M5: CPU time fell from 1.45 s to 1.29 s, and wall time to 0.16 s. On the GitHub x86-64 runner it made no visible difference (1.25 s to 1.23 s), so the board run decides whether this step is worth keeping.
 
 Result: to be filled in from the board run.
 
