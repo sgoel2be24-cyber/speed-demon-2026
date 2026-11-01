@@ -7,11 +7,6 @@ use std::cmp::Reverse;
 /// The spec's limit: a phrase has up to 8 terms, a BOOL query up to 6.
 pub const MAX_TERMS: usize = 8;
 
-/// A query whose cover terms appear this often in `queries.txt` is evaluated in every block,
-/// with no trigger lists, because it would be triggered in nearly all of them. This affects
-/// speed only, never an answer: evaluating more often cannot change a result.
-const ALWAYS_ON_USES: u64 = 16;
-
 #[derive(Clone, Copy, Default)]
 pub enum Op {
     #[default]
@@ -72,8 +67,6 @@ pub struct Compiled<'a> {
     pub n_bool: usize,
     /// How many terms appear in a BOOL query. These have the lowest ids.
     pub n_bool_terms: u32,
-    /// How many of the first queries run in every block.
-    pub n_always: usize,
     /// For each line of `queries.txt`, its position in `queries`.
     pub position_of_line: Vec<u32>,
     /// For each term, the BOOL queries to evaluate in a block where the term occurs.
@@ -211,8 +204,6 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     for pair in &mut cover_pairs {
         pair.1 = position_of_line[pair.1 as usize];
     }
-    let n_always = evaluations.iter().filter(|&&e| e > ALWAYS_ON_USES).count();
-    cover_pairs.retain(|pair| pair.1 as usize >= n_always);
     for pair in &mut anchor_pairs {
         pair.1.0 = position_of_line[pair.1.0 as usize];
     }
@@ -224,7 +215,6 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
         queries,
         n_bool,
         n_bool_terms,
-        n_always,
         position_of_line,
         triggers: TermLists::build(n_terms, &cover_pairs),
         anchors: TermLists::build(n_terms, &anchor_pairs),

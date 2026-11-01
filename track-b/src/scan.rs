@@ -73,19 +73,15 @@ impl Block {
                 self.pending[query as usize / 64] |= 1 << (query % 64);
             }
         }
-        let words = &self.words;
-        let mut run = |q: usize| {
-            let result = evaluate(&plan.queries[q], words);
-            if result != 0 {
-                totals.add_word(q, result, block as u32 * 64);
-            }
-        };
-        (0..plan.n_always).for_each(&mut run);
         for (i, pending) in self.pending.iter_mut().enumerate() {
             let mut queries = std::mem::take(pending);
             while queries != 0 {
-                run(i * 64 + queries.trailing_zeros() as usize);
+                let q = i * 64 + queries.trailing_zeros() as usize;
                 queries &= queries - 1;
+                let result = evaluate(&plan.queries[q], &self.words);
+                if result != 0 {
+                    totals.add_word(q, result, block as u32 * 64);
+                }
             }
         }
         for &term in touched {
