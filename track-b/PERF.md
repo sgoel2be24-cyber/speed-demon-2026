@@ -9,9 +9,9 @@ Every step from the reference to the final version, each with the live-board run
 | 2 | Term table: exact 16-byte keys, multiplicative hash, no token copies | run-258cf7536de6 | 0.437 | 37.9 | 595 | 63.63 |
 | 3 | Tokens found 32 bytes at a time with AVX2 | run-6ababf33b096 | 0.365 | 38.4 | 635 | 65.39 |
 | 4 | Lookup loop without branches: misses get their own id, the anchor flag lives in the slot | run-d4e0ab16bdba | 0.339 | 38.9 | 653 | 66.09 |
-| 5 | Same code in fewer lines | | 0.431 | 37.5 | 607 | 63.72 |
+| 5 | Same code in fewer lines | run-b2fced9fd22d | 0.431 | 37.5 | 607 | 63.72 |
 | 6 | Evaluate triggered queries in memory order, busiest first | run-7e6f926daaac | 0.295 | 38.6 | 636 | 67.69 |
-| 7 | Prefetch the term table's slots, one document at a time | | | | | |
+| 7 | Prefetch the term table's slots, one document at a time | run-a778f48fd086 | 0.294 | 40.1 | 654 | 67.64 |
 
 ## What the data said before any code
 
@@ -91,13 +91,28 @@ Result: 17% faster in the A/B job, and 0.295 s on the board, a gain of 1.6 point
 
 Expected: rare tokens land on table slots that are not in cache. A document's tokens are known before any lookup, so hashing them first and prefetching their slots lets those misses overlap.
 
-Result: 4.4 to 5.5% faster in two A/B runs. Board run to come.
+Result: 4.4 to 5.5% faster in two A/B runs. On the board, 0.294 s and 67.64 points, level with step 6, because one run cannot show a 5% gain and the change added 18 lines. Kept on the strength of the A/B runs.
 
 ## Experiments that failed
 
 - **Writing token edges in bulk.** Tokenising looked slow for AVX2, so the loop writing edges one at a time was replaced with one writing 16 at a time, to avoid a mispredicted exit per chunk. It came out 2% slower than without it in the A/B job, so it was reverted.
 - **Populating the file mapping up front.** The idea was that page faults were a hidden cost. No change in the A/B job, on a 2-core runner. The board has more threads, so it could still differ there.
 - **Removing the branch on each BOOL operator.** About 1% in the A/B job, within noise, so not worth the lines.
+- **Prefetching term words too.** A second prefetch stage, with word setting moved to its own pass, came out 2.4% slower in the A/B job. The extra pass cost more than the misses it hid, so it was reverted.
+
+## Profile on x86
+
+A sampling profile of step 7, on a GitHub x86-64 runner, share of CPU time:
+
+| Function | Share |
+|---|---|
+| Evaluation: `evaluate`, `add_word`, `flush` | 34% |
+| Lookup: `find`, `Key::at`, `lookup` | 25.5% |
+| Tokenising: `find_token_edges` | 18% |
+| Per-token loop: setting term words | 16% |
+| Phrase checks | 3% |
+
+Kernel time barely shows, which rules out page faults on this runner. After this, small changes to the existing loops stopped paying: two of the last three made things worse. Going much further needs a different shape for lookup or evaluation, not more tuning.
 
 ## Experiments still to try on the board
 
