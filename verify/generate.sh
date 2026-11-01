@@ -4,13 +4,13 @@
 #     verify/generate.sh <contest-repo> <data-folder> [python]
 #
 # Finished datasets are skipped, so it is safe to run again.
-set -u
+set -euo pipefail
 export CONTEST="$1" DATA="$2" PY="${3:-python3}"
 
 one() {
-  local scale=$1 seed=$2 dir="$DATA/$scale-seed$seed"
+  local dir="$DATA/$1-seed$2"
   [ -f "$dir/oracle/results.txt" ] && return 0
-  "$PY" "$CONTEST/generators/b_index.py" --seed "$seed" --scale "$scale" --out "$dir" 2>/dev/null &&
+  "$PY" "$CONTEST/generators/b_index.py" --seed "$2" --scale "$1" --out "$dir" &&
     "$PY" "$CONTEST/reference/b_index.py" --data "$dir" --out "$dir/oracle"
 }
 export -f one
