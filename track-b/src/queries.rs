@@ -6,8 +6,9 @@ use crate::terms::TermTable;
 /// The spec's limit: a phrase has up to 8 terms, a BOOL query up to 6.
 pub const MAX_TERMS: usize = 8;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub enum Op {
+    #[default]
     And,
     Or,
     Not,
@@ -15,18 +16,12 @@ pub enum Op {
 
 /// One line of `queries.txt`, with its terms as ids. `ops[i]` joins `terms[i]` and
 /// `terms[i + 1]`. A phrase has no operators.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Query {
     pub terms: [u32; MAX_TERMS],
     pub ops: [Op; MAX_TERMS],
     pub len: usize,
-}
-
-/// A phrase to check wherever its anchor term occurs. The anchor is term `at` of the phrase.
-#[derive(Clone, Copy)]
-pub struct Anchor {
-    pub query: u32,
-    pub at: u32,
+    pub is_phrase: bool,
 }
 
 /// A compact map from term id to a list of items.
@@ -68,8 +63,9 @@ pub struct Compiled<'a> {
     pub queries: Vec<Query>,
     /// For each term, the BOOL queries to evaluate in a block where the term occurs.
     pub triggers: TermLists<u32>,
-    /// For each term, the phrases to check at each of its occurrences.
-    pub anchors: TermLists<Anchor>,
+    /// For each term, the phrases to check at each of its occurrences, as the query and the
+    /// position of the term within the phrase.
+    pub anchors: TermLists<(u32, u32)>,
 }
 
 fn parse_op(word: &[u8]) -> Op {
@@ -82,30 +78,26 @@ fn parse_op(word: &[u8]) -> Op {
 }
 
 /// Reads one line by position: `and`, `or` and `not` are ordinary terms wherever a term is
-/// expected, so a word is an operator only because of where it stands.
-fn parse_line<'a>(line: &'a [u8], table: &mut TermTable<'a>) -> (Query, bool) {
+/// expected, so a word is an operator only because of where it stands. Only a phrase has
+/// quotes, and they cannot appear anywhere else.
+fn parse_line<'a>(line: &'a [u8], table: &mut TermTable<'a>) -> Query {
     let space = line.iter().position(|&b| b == b' ').expect("query kind");
-    let (kind, rest) = (&line[..space], &line[space + 1..]);
-    let is_phrase = kind == b"PHRASE";
-    let body = if is_phrase {
-        &rest[1..rest.len() - 1]
-    } else {
-        rest
-    };
+    let rest = &line[space + 1..];
+    let quoted = rest.strip_prefix(b"\"");
+    let body = quoted.map_or(rest, |text| &text[..text.len() - 1]);
     let mut query = Query {
-        terms: [0; MAX_TERMS],
-        ops: [Op::And; MAX_TERMS],
-        len: 0,
+        is_phrase: quoted.is_some(),
+        ..Query::default()
     };
     for (i, word) in body.split(|&b| b == b' ').enumerate() {
-        if is_phrase || i % 2 == 0 {
+        if query.is_phrase || i % 2 == 0 {
             query.terms[query.len] = table.intern(word);
             query.len += 1;
         } else {
             query.ops[query.len - 1] = parse_op(word);
         }
     }
-    (query, is_phrase)
+    query
 }
 
 /// Adds the query's cover to `pairs`: a set of terms such that every matching document
@@ -115,18 +107,15 @@ fn parse_line<'a>(line: &'a [u8], table: &mut TermTable<'a>) -> (Query, bool) {
 /// a match of `R AND t` contains `t` and is in R, so either side's cover will do;
 /// a match of `R OR t` is in R or contains `t`, so both covers are needed;
 /// a match of `R NOT t` is in R, so R's cover is enough.
-fn push_cover(query: &Query, index: u32, freq: &[u32], pairs: &mut Vec<(u32, u32)>) {
+fn push_cover(query: &Query, index: u32, freq: &[u64], pairs: &mut Vec<(u32, u32)>) {
     let start = pairs.len();
     pairs.push((query.terms[0], index));
     for i in 1..query.len {
         let term = query.terms[i];
         match query.ops[i - 1] {
             Op::And => {
-                let cost: u64 = pairs[start..]
-                    .iter()
-                    .map(|&(t, _)| freq[t as usize] as u64)
-                    .sum();
-                if (freq[term as usize] as u64) < cost {
+                let cost: u64 = pairs[start..].iter().map(|p| freq[p.0 as usize]).sum();
+                if freq[term as usize] < cost {
                     pairs.truncate(start);
                     pairs.push((term, index));
                 }
@@ -139,7 +128,7 @@ fn push_cover(query: &Query, index: u32, freq: &[u32], pairs: &mut Vec<(u32, u32
 
 /// The phrase term to anchor on. Any term is correct, so this only affects speed. How often
 /// a term appears in `queries.txt` is a good, free guide to how rare it is in the corpus.
-fn pick_anchor(query: &Query, table: &TermTable, freq: &[u32]) -> usize {
+fn pick_anchor(query: &Query, table: &TermTable, freq: &[u64]) -> usize {
     (0..query.len)
         .min_by_key(|&i| {
             let term = query.terms[i];
@@ -152,15 +141,12 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     let words = text.iter().filter(|&&b| b == b' ' || b == b'\n').count();
     let mut table = TermTable::with_capacity(words);
     let mut queries = Vec::new();
-    let mut is_phrase = Vec::new();
     for line in text.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
-        let (query, phrase) = parse_line(line, &mut table);
-        queries.push(query);
-        is_phrase.push(phrase);
+        queries.push(parse_line(line, &mut table));
     }
 
     // Number terms from most to least used, so the busiest term words share cache lines.
-    let mut uses = vec![0u32; table.len()];
+    let mut uses = vec![0u64; table.len()];
     for query in &queries {
         for &term in &query.terms[..query.len] {
             uses[term as usize] += 1;
@@ -169,29 +155,22 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     let mut by_use: Vec<u32> = (0..table.len() as u32).collect();
     by_use.sort_by_key(|&term| std::cmp::Reverse(uses[term as usize]));
     let mut new_id = vec![0u32; table.len()];
-    let mut freq = vec![0u32; table.len()];
+    let mut freq = vec![0u64; table.len()];
     for (new, &old) in by_use.iter().enumerate() {
         new_id[old as usize] = new as u32;
         freq[new] = uses[old as usize];
     }
     table.renumber(&new_id);
-    for query in &mut queries {
-        let len = query.len;
-        for term in &mut query.terms[..len] {
-            *term = new_id[*term as usize];
-        }
+    for term in queries.iter_mut().flat_map(|query| &mut query.terms) {
+        *term = new_id[*term as usize];
     }
 
     let mut cover_pairs = Vec::new();
     let mut anchor_pairs = Vec::new();
     for (i, query) in queries.iter().enumerate() {
-        if is_phrase[i] {
+        if query.is_phrase {
             let at = pick_anchor(query, &table, &freq);
-            let anchor = Anchor {
-                query: i as u32,
-                at: at as u32,
-            };
-            anchor_pairs.push((query.terms[at], anchor));
+            anchor_pairs.push((query.terms[at], (i as u32, at as u32)));
             table.mark_anchor(query.terms[at]);
         } else {
             push_cover(query, i as u32, &freq, &mut cover_pairs);

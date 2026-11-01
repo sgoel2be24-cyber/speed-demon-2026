@@ -87,10 +87,9 @@ impl Block {
 /// another document and any punctuation between its terms is invisible.
 #[inline]
 fn check_phrases(plan: &Compiled, ids: &[u32], at: usize, doc: u16, totals: &mut Totals) {
-    for anchor in plan.anchors.get(ids[at]) {
-        let q = anchor.query as usize;
-        let query = &plan.queries[q];
-        let Some(start) = at.checked_sub(anchor.at as usize) else {
+    for &(q, anchor_at) in plan.anchors.get(ids[at]) {
+        let (q, query) = (q as usize, &plan.queries[q as usize]);
+        let Some(start) = at.checked_sub(anchor_at as usize) else {
             continue;
         };
         if totals.last[q] != doc && ids[start..].starts_with(&query.terms[..query.len]) {

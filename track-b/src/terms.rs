@@ -84,6 +84,7 @@ impl Found {
 ///
 /// A slot holds a `Found`. Tokens that are not query terms get the id `miss_id()`, one past
 /// the last term, so the scan treats them like any term and needs no branch for them.
+#[derive(Default)]
 pub struct TermTable<'a> {
     slots: Vec<u32>,
     keys: Vec<Key>,
@@ -94,12 +95,7 @@ pub struct TermTable<'a> {
 impl<'a> TermTable<'a> {
     /// `max_terms` bounds the number of distinct terms.
     pub fn with_capacity(max_terms: usize) -> Self {
-        let mut table = TermTable {
-            slots: Vec::new(),
-            keys: Vec::new(),
-            terms: Vec::new(),
-            shift: 0,
-        };
+        let mut table = Self::default();
         table.reset_slots(max_terms);
         table
     }

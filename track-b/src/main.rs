@@ -10,27 +10,20 @@ mod queries;
 mod scan;
 mod terms;
 
-use std::ffi::{c_int, c_void};
 use std::fs::{self, File};
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::ptr::null_mut;
 use std::{env, io, slice, thread};
 
 /// Using fewer shards than this could overflow the 16-bit local document numbers.
 const MIN_SHARDS: usize = 12;
 
-const PROT_READ: c_int = 1;
-const MAP_PRIVATE: c_int = 2;
+const PROT_READ: i32 = 1;
+const MAP_PRIVATE: i32 = 2;
 
 unsafe extern "C" {
-    fn mmap(
-        addr: *mut c_void,
-        len: usize,
-        prot: c_int,
-        flags: c_int,
-        fd: c_int,
-        off: i64,
-    ) -> *mut c_void;
+    fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut u8;
 }
 
 /// Maps a file read-only. The harness loads `/data` into the page cache before the run, so
@@ -41,18 +34,11 @@ fn map_file(path: &Path) -> io::Result<&'static [u8]> {
     // SAFETY: a fresh private read-only mapping aliases nothing in this program, and it is
     // never unmapped, so the 'static slice stays valid. `/data` does not change during a run.
     unsafe {
-        let start = mmap(
-            std::ptr::null_mut(),
-            len,
-            PROT_READ,
-            MAP_PRIVATE,
-            file.as_raw_fd(),
-            0,
-        );
+        let start = mmap(null_mut(), len, PROT_READ, MAP_PRIVATE, file.as_raw_fd(), 0);
         if start as isize == -1 {
             return Err(io::Error::last_os_error());
         }
-        Ok(slice::from_raw_parts(start as *const u8, len))
+        Ok(slice::from_raw_parts(start, len))
     }
 }
 
@@ -78,14 +64,10 @@ fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
     let data = Path::new(args.get(1).map_or("/data", |s| s));
     let out = Path::new(args.get(2).map_or("/out", |s| s));
-    let threads = args.get(3).map_or_else(
-        || {
-            thread::available_parallelism()
-                .map_or(1, |n| n.get())
-                .max(MIN_SHARDS)
-        },
-        |s| s.parse().expect("thread count"),
-    );
+    let cores = thread::available_parallelism().map_or(1, |n| n.get());
+    let threads = args
+        .get(3)
+        .map_or(cores.max(MIN_SHARDS), |s| s.parse().expect("thread count"));
 
     let docs = map_file(&data.join("docs.txt"))?;
     let plan = queries::compile(map_file(&data.join("queries.txt"))?);
@@ -102,8 +84,6 @@ fn main() -> io::Result<()> {
             .collect()
     });
 
-    fs::write(
-        out.join("results.txt"),
-        output::format_results(&totals, plan.queries.len()),
-    )
+    let results = output::format_results(&totals, plan.queries.len());
+    fs::write(out.join("results.txt"), results)
 }
