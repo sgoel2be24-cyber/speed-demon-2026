@@ -1,37 +1,40 @@
 //! One pass over a shard of `docs.txt`, answering every query as it goes.
 
+use crate::classify::{CHUNK, classify};
 use crate::eval::{Totals, evaluate};
 use crate::queries::Compiled;
 use crate::terms::{Key, NONE};
-
-/// Whether a byte belongs to a token. Only ASCII letters and digits do: every byte of 0x80 or
-/// above separates, even inside a letter.
-const IS_TOKEN: [bool; 256] = {
-    let mut table = [false; 256];
-    let mut b = 0;
-    while b < 256 {
-        table[b] = (b as u8).is_ascii_alphanumeric();
-        b += 1;
-    }
-    table
-};
 
 /// Finds where one document's tokens start and stop. `edges` receives the position of each
 /// change between token and separator, so tokens are its consecutive pairs. Returns the
 /// position of the LF that ends the document, which is what closes a token at the very end.
 fn find_token_edges(bytes: &[u8], mut at: usize, edges: &mut Vec<u32>) -> usize {
     edges.clear();
-    let mut in_token = false;
+    let mut in_token = 0;
     loop {
-        let byte = bytes[at];
-        if IS_TOKEN[byte as usize] != in_token {
-            in_token = !in_token;
-            edges.push(at as u32);
+        let mut padded = [0; CHUNK];
+        // Near the end of the file, a full read would run past the mapping.
+        let chunk = match bytes.get(at..at + CHUNK) {
+            Some(full) => full.try_into().expect("a full chunk"),
+            None => {
+                padded[..bytes.len() - at].copy_from_slice(&bytes[at..]);
+                &padded
+            }
+        };
+        let (mut tokens, line_ends) = classify(chunk);
+        if line_ends != 0 {
+            tokens &= (1 << line_ends.trailing_zeros()) - 1;
         }
-        if byte == b'\n' {
-            return at;
+        let mut changes = tokens ^ (tokens << 1 | in_token);
+        while changes != 0 {
+            edges.push(at as u32 + changes.trailing_zeros());
+            changes &= changes - 1;
         }
-        at += 1;
+        if line_ends != 0 {
+            return at + line_ends.trailing_zeros() as usize;
+        }
+        in_token = tokens >> (CHUNK - 1);
+        at += CHUNK;
     }
 }
 

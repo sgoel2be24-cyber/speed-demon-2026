@@ -3,6 +3,7 @@
 //!
 //!     solution [data_dir] [out_dir] [threads]
 
+mod classify;
 mod eval;
 mod output;
 mod queries;

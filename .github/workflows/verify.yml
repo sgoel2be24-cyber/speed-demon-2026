@@ -28,6 +28,12 @@ jobs:
       - name: Build
         run: cargo build --release --manifest-path track-b/Cargo.toml
 
+      - name: Prove the AVX2 classifier correct for every byte
+        working-directory: verify/classify_test
+        env:
+          RUSTFLAGS: -C target-cpu=x86-64-v3
+        run: cargo run --release | tee /dev/stderr | grep -q "AVX2 build: true"
+
       - name: Fetch the generators and the reference
         run: git clone --depth 1 https://github.com/hackathon-raptors/speed-demon-2026 contest
 
