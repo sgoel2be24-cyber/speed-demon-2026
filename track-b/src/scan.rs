@@ -91,8 +91,10 @@ fn check_phrases(plan: &Compiled, ids: &[u32], at: usize, doc: u16, totals: &mut
         let Some(start) = at.checked_sub(anchor_at as usize) else {
             continue;
         };
-        if totals.last[q] != doc && ids[start..].starts_with(&query.terms[..query.len as usize]) {
-            totals.last[q] = doc;
+        if totals.tally[q].last != doc
+            && ids[start..].starts_with(&query.terms[..query.len as usize])
+        {
+            totals.tally[q].last = doc;
             totals.add_doc(q, doc);
         }
     }

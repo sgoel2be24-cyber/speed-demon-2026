@@ -45,16 +45,23 @@ fn sum_of_bit_positions(word: u64) -> u32 {
         .sum()
 }
 
+/// One query's running answer within a shard, small enough that a sweep over queries reads
+/// few cache lines.
+#[derive(Clone, Copy)]
+pub struct Tally {
+    pub sum: u32,
+    pub count: u16,
+    /// For a phrase, the last document counted.
+    pub last: u16,
+}
+
 /// Running answers for every query, for one shard of the corpus. Document numbers here are
-/// local to the shard, which keeps them in 16 bits. The fields are separate arrays so that
-/// the ones used on every evaluation stay close together in memory.
+/// local to the shard, which keeps them in 16 bits.
 pub struct Totals {
     /// The id of the shard's first document.
     pub base: u32,
-    /// For a phrase, the last document counted.
-    pub last: Vec<u16>,
-    pub count: Vec<u16>,
-    pub sum: Vec<u32>,
+    pub tally: Vec<Tally>,
+    /// The first ids are read and written far less often, so they live apart.
     pub first: Vec<[u16; MAX_IDS]>,
 }
 
@@ -62,9 +69,14 @@ impl Totals {
     pub fn new(base: u32, n_queries: usize) -> Self {
         Totals {
             base,
-            last: vec![NEVER; n_queries],
-            count: vec![0; n_queries],
-            sum: vec![0; n_queries],
+            tally: vec![
+                Tally {
+                    sum: 0,
+                    count: 0,
+                    last: NEVER
+                };
+                n_queries
+            ],
             first: vec![[0; MAX_IDS]; n_queries],
         }
     }
@@ -73,7 +85,8 @@ impl Totals {
     #[inline]
     pub fn add_word(&mut self, query: usize, word: u64, block_start: u32) {
         let matches = word.count_ones();
-        let seen = self.count[query] as usize;
+        let tally = &mut self.tally[query];
+        let seen = tally.count as usize;
         let mut rest = word;
         for slot in self.first[query].iter_mut().skip(seen) {
             if rest == 0 {
@@ -82,18 +95,19 @@ impl Totals {
             *slot = (block_start + rest.trailing_zeros()) as u16;
             rest &= rest - 1;
         }
-        self.count[query] += matches as u16;
-        self.sum[query] += matches * block_start + sum_of_bit_positions(word);
+        tally.count += matches as u16;
+        tally.sum += matches * block_start + sum_of_bit_positions(word);
     }
 
     /// Records one matching document.
     #[inline]
     pub fn add_doc(&mut self, query: usize, doc: u16) {
-        let seen = self.count[query] as usize;
+        let tally = &mut self.tally[query];
+        let seen = tally.count as usize;
         if seen < MAX_IDS {
             self.first[query][seen] = doc;
         }
-        self.count[query] += 1;
-        self.sum[query] += doc as u32;
+        tally.count += 1;
+        tally.sum += doc as u32;
     }
 }
