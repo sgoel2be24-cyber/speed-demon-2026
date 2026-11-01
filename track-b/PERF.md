@@ -122,6 +122,9 @@ Result: 0.280 s, the best run so far, for 8 more Dockerfile lines. The generator
 - **Writing token edges in bulk.** Tokenising looked slow for AVX2, so the loop writing edges one at a time was replaced with one writing 16 at a time, to avoid a mispredicted exit per chunk. It came out 2% slower than without it in the A/B job, so it was reverted.
 - **Populating the file mapping up front.** The idea was that page faults were a hidden cost. No change in the A/B job, on a 2-core runner. The board has more threads, so it could still differ there.
 - **Removing the branch on each BOOL operator.** About 1% in the A/B job, within noise, so not worth the lines.
+- **Keeping each query's running counters in one struct.** No real change in the A/B job, so the separate arrays stayed.
+- **Computing the key mask instead of reading a table.** About 20 fewer lines but 2.4% slower. The points cancel out, so the table stayed.
+- **Removing bounds checks from the hottest loops.** 1.8% faster in the A/B job, but it adds `unsafe` blocks to code people have to review. Not worth it.
 - **Prefetching term words too.** A second prefetch stage, with word setting moved to its own pass, came out 2.4% slower in the A/B job. The extra pass cost more than the misses it hid, so it was reverted.
 
 ## Profile on x86
@@ -136,7 +139,7 @@ A sampling profile of step 7, on a GitHub x86-64 runner, share of CPU time:
 | Per-token loop: setting term words | 16% |
 | Phrase checks | 3% |
 
-Kernel time barely shows, which rules out page faults on this runner. After this, small changes to the existing loops stopped paying: two of the last three made things worse. Going much further needs a different shape for lookup or evaluation, not more tuning.
+Kernel time barely shows, which rules out page faults on this runner. After this, small changes to the existing loops stopped paying, and several made things worse. Going much further needs a different shape for lookup or evaluation, not more tuning. Line count matters as much from here: 100 fewer lines is worth about a point, the same as a 15% speed-up that adds 100 lines.
 
 ## Experiments still to try on the board
 

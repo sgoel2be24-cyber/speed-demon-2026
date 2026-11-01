@@ -14,7 +14,11 @@ Evaluating all 31,000 queries on every block would be far too slow, so each quer
 
 How often a term appears in `queries.txt` turned out to be a good stand-in for how rare it is in the corpus, so choosing covers and anchors needs no corpus statistics at all.
 
+Triggered queries are marked in a bitset and then evaluated in memory order, with the most often evaluated first, because scattered memory reads turned out to be the main cost on the scoring CPU.
+
 Each thread keeps running totals for its own part of the corpus. The parts are in document order, so joining them gives each query's count, sum and ten smallest ids.
+
+The binary is built with profile guidance, trained on the organisers' generator at build time on a seed other than the public one.
 
 ## Dependencies
 
@@ -22,4 +26,6 @@ None.
 
 ## With another 24 hours
 
-To be written from the experiments that are still open at code freeze.
+- **Batched lookups.** Lookup and setting term words take about 41% of CPU, mostly waiting on cache misses one token at a time. Handling several tokens at once with AVX2 is the largest chance left.
+- **Larger blocks for dense queries.** About 3,500 queries run in nearly every block. Evaluating them over more documents at a time, on only their common terms, could remove much of the evaluation cost.
+- **Hardware counters on the scoring machine.** The largest open question is why the leaders use about a quarter of this CPU time. Cache-miss counts per token would answer it directly, where this work had to infer them from timing.
