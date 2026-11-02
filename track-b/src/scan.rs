@@ -13,20 +13,15 @@ fn find_token_edges(bytes: &[u8], mut at: usize, edges: &mut Vec<u32>) -> usize 
     edges.clear();
     let mut in_token = 0;
     loop {
-        let mut padded = [0; CHUNK];
-        // Near the end of the file, a full read would run past the mapping.
-        let chunk = match bytes.get(at..at + CHUNK) {
-            Some(full) => full.try_into().expect("a full chunk"),
-            None => {
-                padded[..bytes.len() - at].copy_from_slice(&bytes[at..]);
-                &padded
-            }
+        let (mut tokens, line_ends) = match bytes.get(at..at + CHUNK) {
+            Some(full) => classify(full.try_into().expect("a full chunk")),
+            None => classify_end(bytes, at),
         };
-        let (mut tokens, line_ends) = classify(chunk);
         if line_ends != 0 {
             tokens &= (1 << line_ends.trailing_zeros()) - 1;
         }
         let mut changes = tokens ^ (tokens << 1 | in_token);
+        edges.reserve(CHUNK);
         while changes != 0 {
             edges.push(at as u32 + changes.trailing_zeros());
             changes &= changes - 1;
@@ -37,6 +32,14 @@ fn find_token_edges(bytes: &[u8], mut at: usize, edges: &mut Vec<u32>) -> usize 
         in_token = tokens >> (CHUNK - 1);
         at += CHUNK;
     }
+}
+
+/// The masks for the last bytes of the file, where a full read would run past the mapping.
+#[cold]
+fn classify_end(bytes: &[u8], at: usize) -> (u32, u32) {
+    let mut padded = [0; CHUNK];
+    padded[..bytes.len() - at].copy_from_slice(&bytes[at..]);
+    classify(&padded)
 }
 
 /// Parses the decimal id at the start of a line. Returns the id and the position of its TAB.
@@ -158,14 +161,16 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         at = line_end + 1;
 
         let (part, bit) = (doc as usize / 64 % 4, 1u64 << (doc % 64));
-        ids.clear();
-        ids.resize(edges.len() / 2, 0);
-        anchored.clear();
         let tokens = edges.as_chunks::<2>().0;
-        keys.clear();
-        for &[start, end] in tokens {
+        // These only ever grow, so that a document pays for no clearing.
+        if ids.len() < tokens.len() {
+            ids.resize(tokens.len(), 0);
+            keys.resize(tokens.len(), (0, Key::default()));
+        }
+        anchored.clear();
+        for (&[start, end], entry) in tokens.iter().zip(&mut keys) {
             let key = Key::at(shard, start as usize, (end - start) as usize);
-            keys.push((plan.table.prefetch(key), key));
+            *entry = (plan.table.prefetch(key), key);
         }
         for (position, ((id, &[start, end]), &(home, key))) in
             ids.iter_mut().zip(tokens).zip(&keys).enumerate()
@@ -187,7 +192,7 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
             }
         }
         for &position in &anchored {
-            check_phrases(plan, &ids, position, doc, &mut totals);
+            check_phrases(plan, &ids[..tokens.len()], position, doc, &mut totals);
         }
 
         if doc as usize % BLOCK == BLOCK - 1 {
