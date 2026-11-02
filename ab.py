@@ -44,5 +44,5 @@ for c in commits:
     base = base or m
     print(f"{c[:8]} median {m*1000:7.1f} ms  min {v[0]*1000:7.1f} ms  ratio {m/base:.3f}")
     peak = subprocess.run(["/usr/bin/time", "-f", "%M", bins[c], "data", "out", "12"], capture_output=True, text=True).stderr.split()[-1]
-    print(f"   peak {int(peak)/1024:.1f} MB")
+    print(f"   peak anon {int(peak)/1024 - (os.path.getsize('data/docs.txt') + os.path.getsize('data/queries.txt'))/1048576:.1f} MB")
     print("   phases " + " ".join(f"{k} {statistics.median(x):.1f}" for k, x in phases[c].items()))
