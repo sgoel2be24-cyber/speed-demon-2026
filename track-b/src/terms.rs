@@ -170,8 +170,17 @@ impl<'a> TermTable<'a> {
     /// on slots that are not cached, and a document's tokens are known in advance, so those
     /// misses can overlap. Passing the slot to `lookup` saves computing the hash twice.
     #[inline]
+<<<<<<< HEAD
     pub fn prefetch(&self, key: Key) -> usize {
         let home = self.home(key);
+=======
+    pub fn route(&self, key: Key) -> u32 {
+        let hash = key.hash();
+        let (word, bits) = Self::filter_position(hash);
+        let empty = self.lines.len() as u32 - 1;
+        let home = (hash >> self.shift) as u32;
+        let _ = (word, bits, empty);
+>>>>>>> c2bfd94 (exp: buckets without filter)
         #[cfg(target_arch = "x86_64")]
         // SAFETY: `home` is inside `slots`, and prefetching only affects the cache.
         unsafe {
