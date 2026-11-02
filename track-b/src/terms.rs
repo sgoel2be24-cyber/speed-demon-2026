@@ -1,7 +1,7 @@
 //! The table of query terms. A corpus token that no query uses is a miss, so nothing is
 //! ever stored for it.
 
-/// A free slot.
+/// A free slot while the queries are being read, when the number of terms is still unknown.
 const EMPTY: u32 = u32::MAX;
 
 /// The last key byte of a token over 16 bytes. No token byte has this value, so a long token
@@ -24,7 +24,7 @@ const KEEP: [[u64; 3]; 18] = {
 
 /// The first bytes of a token, lowercase and zero-padded. No token holds a zero byte, so for
 /// tokens of up to 16 bytes two equal keys mean two equal tokens, with no further comparison.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub struct Key([u64; 2]);
 
 impl Key {
@@ -96,13 +96,19 @@ pub struct TermTable<'a> {
     keys: Vec<Key>,
     terms: Vec<&'a [u8]>,
     shift: u32,
+    /// What a free slot holds. Once all terms are known this is a `Found` with `miss_id()`,
+    /// and `keys` has one more entry for that id, which equals no token's key.
+    empty: u32,
 }
 
 impl<'a> TermTable<'a> {
     /// `max_terms` bounds the number of distinct terms. This table only has to survive parsing,
     /// and `renumber` refits it, so it stays small enough not to cost cache misses of its own.
     pub fn with_capacity(max_terms: usize) -> Self {
-        let mut table = Self::default();
+        let mut table = Self {
+            empty: EMPTY,
+            ..Self::default()
+        };
         table.reset_slots(max_terms + 1);
         table
     }
@@ -110,7 +116,7 @@ impl<'a> TermTable<'a> {
     /// Empties the slots, making room for at least `size`.
     fn reset_slots(&mut self, size: usize) {
         let size = size.max(2).next_power_of_two();
-        self.slots = vec![EMPTY; size];
+        self.slots = vec![self.empty; size];
         self.shift = 64 - size.trailing_zeros();
     }
 
@@ -133,13 +139,12 @@ impl<'a> TermTable<'a> {
     }
 
     /// The slot holding this token, or the free slot where it belongs, starting from `home`.
-    #[inline(always)]
     fn find(&self, home: usize, key: Key, token: &[u8]) -> usize {
         let mask = self.slots.len() - 1;
         let mut i = home;
         loop {
             let slot = self.slots[i];
-            if slot == EMPTY {
+            if slot == self.empty {
                 return i;
             }
             let id = Found(slot).id() as usize;
@@ -156,7 +161,7 @@ impl<'a> TermTable<'a> {
     pub fn intern(&mut self, term: &'a [u8]) -> u32 {
         let key = Key::at(term, 0, term.len());
         let slot = self.find(self.home(key), key, term);
-        if self.slots[slot] == EMPTY {
+        if self.slots[slot] == self.empty {
             self.slots[slot] = (self.terms.len() as u32) << 1;
             self.keys.push(key);
             self.terms.push(term);
@@ -187,10 +192,26 @@ impl<'a> TermTable<'a> {
         home
     }
 
-    /// What a corpus token is. A miss comes back as `miss_id()`, not anchored.
-    #[inline]
-    pub fn lookup(&self, home: usize, key: Key, token: &[u8]) -> Found {
-        Found(self.slots[self.find(home, key, token)].min(self.miss_id() << 1))
+    /// What a corpus token is, from the home slot that `prefetch` gave. A miss comes back as
+    /// `miss_id()`, not anchored.
+    ///
+    /// The slot settles nearly every token with no branch on whether it is a hit, which is
+    /// close to a coin flip: a free slot already holds the answer for a miss, and its id leads
+    /// to a key that matches nothing.
+    #[inline(always)]
+    pub fn lookup(&self, home: usize, key: Key, bytes: &[u8], start: usize, end: usize) -> Found {
+        let slot = self.slots[home];
+        let settled = (self.keys[(slot >> 1) as usize] == key) | (slot == self.empty);
+        if !settled | key.is_long() {
+            return self.probe(home, key, &bytes[start..end]);
+        }
+        Found(slot)
+    }
+
+    /// The rest of a lookup, for a token whose home slot holds another term, or a long token.
+    #[inline(never)]
+    fn probe(&self, home: usize, key: Key, token: &[u8]) -> Found {
+        Found(self.slots[self.find(home, key, token)])
     }
 
     /// Replaces every id with `new_id[id]` and refits the slots to the real number of terms.
@@ -200,9 +221,11 @@ impl<'a> TermTable<'a> {
         let mut order: Vec<usize> = (0..old_terms.len()).collect();
         order.sort_by_key(|&old| new_id[old]);
         self.keys.clear();
+        self.empty = (old_terms.len() as u32) << 1;
         self.reset_slots(old_terms.len() * 3);
         for old in order {
             self.intern(old_terms[old]);
         }
+        self.keys.push(Key::default());
     }
 }

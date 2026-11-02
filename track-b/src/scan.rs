@@ -170,8 +170,7 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         for (position, ((id, &[start, end]), &(home, key))) in
             ids.iter_mut().zip(tokens).zip(&keys).enumerate()
         {
-            let (start, end) = (start as usize, end as usize);
-            let found = plan.table.lookup(home, key, &shard[start..end]);
+            let found = plan.table.lookup(home, key, shard, start as usize, end as usize);
             *id = found.id();
             // Written without branches: whether a token is new to the block is unpredictable.
             let term = found.id().min(plan.n_bool_terms);
