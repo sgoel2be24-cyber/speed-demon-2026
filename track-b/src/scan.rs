@@ -4,6 +4,7 @@ use crate::classify::{CHUNK, classify};
 use crate::eval::{Totals, evaluate};
 use crate::queries::Compiled;
 use crate::terms::Key;
+pub type ShardResult = Totals;
 
 /// Finds where one document's tokens start and stop. `edges` receives the position of each
 /// change between token and separator, so tokens are its consecutive pairs. Returns the

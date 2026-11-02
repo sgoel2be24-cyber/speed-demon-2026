@@ -74,17 +74,21 @@ fn main() -> io::Result<()> {
     let plan = queries::compile(map_file(&data.join("queries.txt"))?);
     let t1 = t0.elapsed();
 
-    let totals: Vec<_> = thread::scope(|scope| {
-        let plan = &plan;
-        let workers: Vec<_> = shards(docs, threads)
-            .into_iter()
-            .map(|shard| scope.spawn(move || scan::scan_shard(plan, shard)))
-            .collect();
-        workers
-            .into_iter()
-            .map(|w| w.join().expect("worker"))
-            .collect()
+    // Timing only: 12 shards, one worker per CPU, so the runner acts like one board core.
+    let parts = shards(docs, threads);
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let done: Vec<std::sync::Mutex<Option<scan::ShardResult>>> =
+        parts.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    thread::scope(|scope| {
+        for _ in 0..cores {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(shard) = parts.get(i) else { break };
+                *done[i].lock().unwrap() = Some(scan::scan_shard(&plan, shard));
+            });
+        }
     });
+    let totals: Vec<_> = done.into_iter().map(|d| d.into_inner().unwrap().unwrap()).collect();
 
     let t2 = t0.elapsed();
     let results = output::format_results(&totals, &plan.position_of_line);
