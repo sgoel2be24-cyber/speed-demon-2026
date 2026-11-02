@@ -92,7 +92,7 @@ impl Found {
 /// the last term, so the scan treats them like any term and needs no branch for them.
 #[derive(Default)]
 pub struct TermTable<'a> {
-    slots: Vec<u32>,
+    slots: &'static mut [u32],
     keys: Vec<Key>,
     terms: Vec<&'a [u8]>,
     shift: u32,
@@ -116,7 +116,7 @@ impl<'a> TermTable<'a> {
     /// Empties the slots, making room for at least `size`.
     fn reset_slots(&mut self, size: usize) {
         let size = size.max(2).next_power_of_two();
-        self.slots = vec![self.empty; size];
+        self.slots = crate::huge_slice(size, self.empty);
         self.shift = 64 - size.trailing_zeros();
     }
 

@@ -22,8 +22,33 @@ const MIN_SHARDS: usize = 12;
 const PROT_READ: i32 = 1;
 const MAP_PRIVATE: i32 = 2;
 
+const HUGE_PAGE: usize = 1 << 21;
+#[cfg(target_os = "linux")]
+const MAP_PRIVATE_ANONYMOUS: i32 = 0x22;
+#[cfg(not(target_os = "linux"))]
+const MAP_PRIVATE_ANONYMOUS: i32 = 0x1002;
+const MADV_HUGEPAGE: i32 = 14;
+
 unsafe extern "C" {
     fn mmap(addr: *mut u8, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut u8;
+    fn madvise(addr: *mut u8, len: usize, advice: i32) -> i32;
+}
+
+/// A slice that never goes away, on huge pages where the system allows them. The table is read
+/// at random, which on 4 KB pages would miss the TLB as well as the caches.
+pub fn huge_slice<T: Copy>(len: usize, value: T) -> &'static mut [T] {
+    let bytes = (len * size_of::<T>()).next_multiple_of(HUGE_PAGE);
+    // SAFETY: a fresh anonymous mapping aliases nothing, stays valid forever because it is
+    // never unmapped, and starts on a huge page, which is aligned for any `T` used here.
+    unsafe {
+        let start = mmap(null_mut(), bytes + HUGE_PAGE, 3, MAP_PRIVATE_ANONYMOUS, -1, 0);
+        assert!(start as isize != -1, "reserving memory");
+        let aligned = (start as usize).next_multiple_of(HUGE_PAGE) as *mut T;
+        madvise(aligned.cast(), bytes, MADV_HUGEPAGE);
+        let slice = slice::from_raw_parts_mut(aligned, len);
+        slice.fill(value);
+        slice
+    }
 }
 
 /// Maps a file read-only. The harness loads `/data` into the page cache before the run, so
