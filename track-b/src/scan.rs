@@ -136,7 +136,7 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         keys.clear();
         for &[start, end] in tokens {
             let key = Key::at(shard, start as usize, (end - start) as usize);
-            keys.push((plan.table.prefetch(key), key));
+            keys.push((plan.table.route(key), key));
         }
         for (position, ((id, &[start, end]), &(home, key))) in
             ids.iter_mut().zip(tokens).zip(&keys).enumerate()
