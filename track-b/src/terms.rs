@@ -1,7 +1,7 @@
 //! The table of query terms. A corpus token that no query uses is a miss, so nothing is
 //! ever stored for it.
 
-/// A free slot.
+/// A free slot while the queries are being read, when the number of terms is still unknown.
 const EMPTY: u32 = u32::MAX;
 
 /// The last key byte of a token over 16 bytes. No token byte has this value, so a long token
@@ -24,7 +24,7 @@ const KEEP: [[u64; 3]; 18] = {
 
 /// The first bytes of a token, lowercase and zero-padded. No token holds a zero byte, so for
 /// tokens of up to 16 bytes two equal keys mean two equal tokens, with no further comparison.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub struct Key([u64; 2]);
 
 impl Key {
@@ -33,14 +33,12 @@ impl Key {
     #[inline]
     pub fn at(bytes: &[u8], start: usize, len: usize) -> Key {
         const LOWERCASE: u64 = 0x2020_2020_2020_2020;
-        let mut window = [0u8; 16];
-        match bytes.get(start..start + 16) {
-            Some(full) => window.copy_from_slice(full),
-            // Too close to the end of the file for a 16-byte read.
-            None => window[..bytes.len() - start].copy_from_slice(&bytes[start..]),
-        }
-        let [low, high] = [&window[..8], &window[8..]]
-            .map(|half| u64::from_le_bytes(half.try_into().expect("8 bytes")) | LOWERCASE);
+        let [low, high] = match bytes.get(start..start + 16) {
+            Some(full) => [&full[..8], &full[8..]]
+                .map(|half| u64::from_le_bytes(half.try_into().expect("8 bytes"))),
+            None => near_end(bytes, start),
+        };
+        let [low, high] = [low | LOWERCASE, high | LOWERCASE];
         let [keep_low, keep_high, mark] = KEEP[len.min(17)];
         Key([low & keep_low, (high & keep_high) | mark])
     }
@@ -56,6 +54,14 @@ impl Key {
         const B: u64 = 0xC2B2_AE3D_27D4_EB4F;
         self.0[0].wrapping_mul(A) ^ self.0[1].wrapping_mul(B)
     }
+}
+
+/// The bytes at `start`, zero-padded, for a token too close to the end for a 16-byte read.
+#[cold]
+fn near_end(bytes: &[u8], start: usize) -> [u64; 2] {
+    let mut window = [0u8; 16];
+    window[..bytes.len() - start].copy_from_slice(&bytes[start..]);
+    [&window[..8], &window[8..]].map(|half| u64::from_le_bytes(half.try_into().expect("8 bytes")))
 }
 
 /// A term id with one more bit, kept together because the scan needs both for every token.
@@ -82,21 +88,28 @@ impl Found {
 /// corpus holds about 600,000 distinct tokens, so accepting a mere hash match would change
 /// an answer sooner or later.
 ///
-/// A slot holds a `Found`. Tokens that are not query terms get the id `miss_id()`, one past
-/// the last term, so the scan treats them like any term and needs no branch for them.
+/// A slot holds a `Found`. Once the terms are known, a free slot holds the id one past the last
+/// term, so a token that is no query's term gets that id, which no query holds, and the scan
+/// needs no branch for it. A phrase can therefore never match across such a token.
 #[derive(Default)]
 pub struct TermTable<'a> {
-    slots: Vec<u32>,
+    slots: &'static mut [u32],
     keys: Vec<Key>,
     terms: Vec<&'a [u8]>,
     shift: u32,
+    /// What a free slot holds. Once all terms are known this is a `Found` with the id one past
+    /// the last term, and `keys` has one more entry for that id, which equals no token's key.
+    empty: u32,
 }
 
 impl<'a> TermTable<'a> {
     /// `max_terms` bounds the number of distinct terms. This table only has to survive parsing,
     /// and `renumber` refits it, so it stays small enough not to cost cache misses of its own.
     pub fn with_capacity(max_terms: usize) -> Self {
-        let mut table = Self::default();
+        let mut table = Self {
+            empty: EMPTY,
+            ..Self::default()
+        };
         table.reset_slots(max_terms + 1);
         table
     }
@@ -104,17 +117,15 @@ impl<'a> TermTable<'a> {
     /// Empties the slots, making room for at least `size`.
     fn reset_slots(&mut self, size: usize) {
         let size = size.max(2).next_power_of_two();
-        self.slots = vec![EMPTY; size];
+        if !self.slots.is_empty() {
+            crate::free_huge(self.slots);
+        }
+        self.slots = crate::huge_slice(size, self.empty);
         self.shift = 64 - size.trailing_zeros();
     }
 
     pub fn len(&self) -> usize {
         self.terms.len()
-    }
-
-    /// The id every miss gets. No query holds it, so a phrase can never match across a miss.
-    pub fn miss_id(&self) -> u32 {
-        self.terms.len() as u32
     }
 
     pub fn term(&self, id: u32) -> &'a [u8] {
@@ -127,13 +138,12 @@ impl<'a> TermTable<'a> {
     }
 
     /// The slot holding this token, or the free slot where it belongs, starting from `home`.
-    #[inline]
     fn find(&self, home: usize, key: Key, token: &[u8]) -> usize {
         let mask = self.slots.len() - 1;
         let mut i = home;
         loop {
             let slot = self.slots[i];
-            if slot == EMPTY {
+            if slot == self.empty {
                 return i;
             }
             let id = Found(slot).id() as usize;
@@ -150,7 +160,7 @@ impl<'a> TermTable<'a> {
     pub fn intern(&mut self, term: &'a [u8]) -> u32 {
         let key = Key::at(term, 0, term.len());
         let slot = self.find(self.home(key), key, term);
-        if self.slots[slot] == EMPTY {
+        if self.slots[slot] == self.empty {
             self.slots[slot] = (self.terms.len() as u32) << 1;
             self.keys.push(key);
             self.terms.push(term);
@@ -181,22 +191,42 @@ impl<'a> TermTable<'a> {
         home
     }
 
-    /// What a corpus token is. A miss comes back as `miss_id()`, not anchored.
-    #[inline]
-    pub fn lookup(&self, home: usize, key: Key, token: &[u8]) -> Found {
-        Found(self.slots[self.find(home, key, token)].min(self.miss_id() << 1))
+    /// What a corpus token is, from the home slot that `prefetch` gave.
+    ///
+    /// The slot settles nearly every token with no branch on whether it is a hit, which is
+    /// close to a coin flip: a free slot already holds the answer for a miss, and its id leads
+    /// to a key that matches nothing.
+    #[inline(always)]
+    pub fn lookup(&self, home: usize, key: Key, bytes: &[u8], start: usize, end: usize) -> Found {
+        // SAFETY: `home` comes from `prefetch`, and every slot holds an id that indexes `keys`,
+        // which has one more entry for the id of a free slot.
+        let (slot, held) = unsafe {
+            let slot = *self.slots.get_unchecked(home);
+            (slot, *self.keys.get_unchecked((slot >> 1) as usize))
+        };
+        let settled = (held == key) | (slot == self.empty);
+        if !settled | key.is_long() {
+            return self.probe(home, key, &bytes[start..end]);
+        }
+        Found(slot)
     }
 
-    /// Replaces every id with `new_id[id]` and refits the slots to the real number of terms.
-    /// Terms go back in id order, so the busiest ones get the shortest probes.
-    pub fn renumber(&mut self, new_id: &[u32]) {
+    /// The rest of a lookup, for a token whose home slot holds another term, or a long token.
+    #[inline(never)]
+    fn probe(&self, home: usize, key: Key, token: &[u8]) -> Found {
+        Found(self.slots[self.find(home, key, token)])
+    }
+
+    /// Gives each term a new id, its place in `order`, and refits the slots to the real number
+    /// of terms. Terms go back in id order, so the busiest ones get the shortest probes.
+    pub fn renumber(&mut self, order: &[u32]) {
         let old_terms = std::mem::take(&mut self.terms);
-        let mut order: Vec<usize> = (0..old_terms.len()).collect();
-        order.sort_by_key(|&old| new_id[old]);
         self.keys.clear();
-        self.reset_slots(old_terms.len() * 3);
-        for old in order {
-            self.intern(old_terms[old]);
+        self.empty = (old_terms.len() as u32) << 1;
+        self.reset_slots(old_terms.len() * 12);
+        for &old in order {
+            self.intern(old_terms[old as usize]);
         }
+        self.keys.push(Key::default());
     }
 }
