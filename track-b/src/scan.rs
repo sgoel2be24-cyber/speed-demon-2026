@@ -152,7 +152,9 @@ fn hash_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &mut [(
     }
 }
 
-/// Turns tokens into term ids and sets each term's bit for document `doc`.
+/// Turns tokens into term ids and sets each term's bit for document `doc`. A dense term needs
+/// one write. Rare terms have a place only while they are in the block, and those places are
+/// scattered, so they wait in `waiting` until the whole document can be handled in one batch.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn set_words(
@@ -161,25 +163,42 @@ fn set_words(
     tokens: &[[u32; 2]],
     keys: &[(usize, Key)],
     ids: &mut [u32],
+    waiting: &mut [u32],
     block: &mut Block,
     anchored: &mut Vec<usize>,
     doc: u16,
 ) {
     let (part, bit) = (doc as usize / 64 % 4, 1u64 << (doc % 64));
-    let (table, n_bool_terms, absent) = (&plan.table, plan.n_bool_terms, block.absent);
-    let mut n_rare = block.n_rare;
+    let (table, n_dense, n_bool_terms) = (&plan.table, plan.n_dense, plan.n_bool_terms);
+    let (absent, mut n_rare) = (block.absent, block.n_rare);
     let (words, slots, rare) = (&mut block.words[..], &mut block.slots[..], &mut block.rare[..]);
     let first_rare = absent + 1;
+    let mut n_waiting = 0;
     for (position, ((id, &[start, end]), &(home, key))) in
         ids.iter_mut().zip(tokens).zip(keys).enumerate()
     {
         let found = table.lookup(home, key, shard, start as usize, end as usize);
-        *id = found.id();
-        // Written without branches: whether a token is new to the block is unpredictable.
-        let term = found.id().min(n_bool_terms);
-        // SAFETY: `term` is at most `n_bool_terms`, which `slots` covers. A slot is the term's
-        // own place, or below `first_rare + n_rare`, and `n_rare` is below the size of `rare`
-        // because each rare term enters once, so all of these stay inside `words` and `rare`.
+        let term = found.id();
+        *id = term;
+        // SAFETY: `words` has an entry for `n_dense`, which nothing reads, and `waiting` has
+        // room for every token of the document.
+        unsafe {
+            *words.get_unchecked_mut(term.min(n_dense) as usize).get_unchecked_mut(part) |= bit;
+            *waiting.get_unchecked_mut(n_waiting) = term;
+        }
+        n_waiting += (term >= n_dense && term < n_bool_terms) as usize;
+        if found.is_anchor() {
+            anchored.push(position);
+        }
+    }
+    for i in 0..n_waiting {
+        if let Some(&next) = waiting.get(i + AHEAD) {
+            prefetch(&slots[next as usize]);
+        }
+        let term = waiting[i];
+        // SAFETY: a waiting term is below `n_bool_terms`, which `slots` covers. A slot is below
+        // `first_rare + n_rare`, and `n_rare` is below the size of `rare` because each rare
+        // term enters once, so all of these stay inside `words` and `rare`.
         unsafe {
             let entry = slots.get_unchecked_mut(term as usize);
             let is_new = *entry == absent;
@@ -188,9 +207,6 @@ fn set_words(
             *rare.get_unchecked_mut(n_rare) = term;
             n_rare += is_new as usize;
             *words.get_unchecked_mut(slot as usize).get_unchecked_mut(part) |= bit;
-        }
-        if found.is_anchor() {
-            anchored.push(position);
         }
     }
     block.n_rare = n_rare;
@@ -222,6 +238,7 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
     let mut totals = Totals::new(base, plan.queries.len());
     let mut block = Block::new(plan);
     let (mut edges, mut ids, mut anchored, mut keys) = (vec![], vec![], vec![], vec![]);
+    let mut waiting = vec![];
     let (mut at, mut doc) = (0, 0u16);
     while at < shard.len() {
         assert!(doc != crate::eval::NEVER, "too many documents in one shard");
@@ -233,11 +250,13 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         // These only ever grow, so that a document pays for no clearing.
         if ids.len() < tokens.len() {
             ids.resize(tokens.len(), 0);
+            waiting.resize(tokens.len(), 0);
             keys.resize(tokens.len(), (0, Key::default()));
         }
         anchored.clear();
         hash_tokens(plan, shard, tokens, &mut keys);
-        set_words(plan, shard, tokens, &keys, &mut ids, &mut block, &mut anchored, doc);
+        let (ids, waiting) = (&mut ids, &mut waiting);
+        set_words(plan, shard, tokens, &keys, ids, waiting, &mut block, &mut anchored, doc);
         for &position in &anchored {
             check_phrases(plan, &ids[..tokens.len()], position, doc, &mut totals);
         }
