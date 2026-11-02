@@ -68,6 +68,32 @@ pub fn evaluate<'a>(
     }
 }
 
+/// Whether a document holds a term.
+#[inline]
+fn contains(term: Postings, doc: u16) -> bool {
+    match term {
+        Postings::Bits(bits) => bits[doc as usize / 64] >> (doc % 64) & 1 == 1,
+        Postings::List(list) => list.binary_search(&doc).is_ok(),
+    }
+}
+
+/// Evaluates a BOOL query on one document, strictly left to right. Most queries have one rare
+/// term that every match must contain, and that term's list is usually a handful of documents,
+/// so testing those directly costs far less than working on a whole part's bits.
+#[inline]
+pub fn matches<'a>(query: &Query, postings: impl Fn(u32) -> Postings<'a>, doc: u16) -> bool {
+    let mut r = contains(postings(query.terms[0]), doc);
+    for i in 1..query.len as usize {
+        let w = contains(postings(query.terms[i]), doc);
+        r = match query.ops[i - 1] {
+            Op::And => r && w,
+            Op::Or => r || w,
+            Op::Not => r && !w,
+        };
+    }
+    r
+}
+
 /// The sum of the positions of the set bits. Each mask picks the positions with one binary
 /// digit set, so this adds up that digit's value over all the set bits at once.
 #[cfg(not(target_feature = "avx2"))]

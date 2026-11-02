@@ -30,6 +30,9 @@ pub struct Query {
     pub is_phrase: bool,
 }
 
+/// In `only_cover`, a query with no single term that every match must contain.
+pub const NO_TERM: u32 = u32::MAX;
+
 /// A compact map from term id to a list of items.
 pub struct TermLists<T> {
     offsets: Vec<u32>,
@@ -72,6 +75,8 @@ pub struct Compiled<'a> {
     pub n_bool: usize,
     /// How many of the first queries run on every part.
     pub n_always: usize,
+    /// For each query, the one term every match must contain, or `NO_TERM` if there are several.
+    pub only_cover: Vec<u32>,
     /// How many terms appear in a BOOL query. These have the lowest ids.
     pub n_bool_terms: u32,
     /// How many terms are dense. These have the lowest ids of all.
@@ -191,6 +196,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     let mut anchor_pairs = Vec::new();
     let mut evaluations = vec![0; queries.len()];
     let mut always = vec![false; queries.len()];
+    let mut only_cover = vec![NO_TERM; queries.len()];
     for (line, query) in queries.iter().enumerate() {
         if query.is_phrase {
             let at = pick_anchor(query, &table, &freq);
@@ -205,6 +211,8 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
             always[line] = cover.iter().any(|p| p.0 < n_dense);
             if always[line] {
                 cover_pairs.truncate(start);
+            } else if let [(term, _)] = cover {
+                only_cover[line] = *term;
             }
         }
     }
@@ -221,6 +229,10 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     let n_bool = evaluations.iter().filter(|&&e| e > 0).count();
     let queries = lines.iter().map(|&line| queries[line as usize]).collect();
     let n_always = always.iter().filter(|&&a| a).count();
+    let only_cover = lines
+        .iter()
+        .map(|&line| only_cover[line as usize])
+        .collect();
     for pair in &mut cover_pairs {
         pair.1 = position_of_line[pair.1 as usize];
     }
@@ -235,6 +247,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
         queries,
         n_bool,
         n_always,
+        only_cover,
         n_bool_terms,
         n_dense,
         position_of_line,

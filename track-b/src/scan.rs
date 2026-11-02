@@ -1,8 +1,8 @@
 //! One pass over a shard of `docs.txt`, answering every query as it goes.
 
 use crate::classify::{CHUNK, classify};
-use crate::eval::{Bits, PART, PART_BITS, Postings, Totals, evaluate};
-use crate::queries::Compiled;
+use crate::eval::{Bits, PART, PART_BITS, Postings, Totals, evaluate, matches};
+use crate::queries::{Compiled, NO_TERM};
 use crate::terms::Key;
 
 /// Finds where one document's tokens start and stop. `edges` receives the position of each
@@ -177,9 +177,20 @@ impl Part {
             }
         };
         let (result, scratch) = (&mut *self.result, &mut *self.scratch);
+        let list_of =
+            |term: u32| &lists[starts[term as usize] as usize..ends[term as usize] as usize];
         let mut run = |q: usize| {
-            evaluate(&plan.queries[q], postings, result, scratch);
-            totals.add_bits(q, result, part_start);
+            let query = &plan.queries[q];
+            if plan.only_cover[q] == NO_TERM {
+                evaluate(query, postings, result, scratch);
+                totals.add_bits(q, result, part_start);
+            } else {
+                for &doc in list_of(plan.only_cover[q]) {
+                    if matches(query, postings, doc) {
+                        totals.add_doc(q, part_start as u16 + doc);
+                    }
+                }
+            }
         };
         (0..plan.n_always).for_each(&mut run);
         for (i, pending) in self.pending.iter_mut().enumerate() {
