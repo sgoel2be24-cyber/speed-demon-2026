@@ -34,6 +34,9 @@ def build(name, variant, training, workspace):
     apply(directory, variant)
     kernel = directory.parent / "verify/kernel_test"
     shutil.copytree(ROOT / "verify/kernel_test", kernel, ignore=shutil.ignore_patterns("target"))
+    if "columns" in variant:
+        test = kernel / "src/lib.rs"
+        test.write_text(test.read_text().replace("assert_eq!(totals.first[0],", "let actual_first: [u16; 10] = std::array::from_fn(|rank| totals.first[rank * totals.count.len()]);\n        assert_eq!(actual_first,"))
     env = dict(os.environ, RUSTFLAGS="-C target-cpu=x86-64-v3", VERIFY_REQUIRE_AVX2="1")
     call(["cargo", "test", "--release", "--", "--nocapture"], cwd=kernel, env=env)
     profile = directory / "profile"
@@ -65,7 +68,7 @@ def main():
     binaries = {}
     for variant in args.variants.split(","):
         binaries[variant] = build(variant, variant, args.train_sample.resolve(), workspace)
-    for variant in args.full_pgo.split(","):
+    for variant in filter(None, args.full_pgo.split(",")):
         binaries[variant + "-full-pgo"] = build(variant + "-full-pgo", variant, args.train_full.resolve(), workspace)
     candidates = [(name, 12) for name in binaries]
     candidates += [(name, threads) for name in ["baseline", "combined", "phase"] if name in binaries for threads in [6, 24]]

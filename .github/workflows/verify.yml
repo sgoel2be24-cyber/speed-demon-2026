@@ -6,6 +6,10 @@ on:
   push:
     paths-ignore:
       - "**.md"
+      - verify/bench.py
+      - verify/candidates.py
+      - verify/phase.rs
+      - .github/workflows/bench.yml
   workflow_dispatch:
 
 jobs:

@@ -6,15 +6,56 @@ def apply(folder, variant):
     folder = Path(folder)
     scan = (folder / "src/scan.rs").read_text()
     evaluation = (folder / "src/eval.rs").read_text()
-    if variant in {"phase", "phase4", "phase32"}:
+    if variant in {"columns", "columns-hash"}:
+        evaluation = evaluation.replace("pub first: Vec<[u16; MAX_IDS]>", "pub first: Vec<u16>")
+        evaluation = evaluation.replace("first: vec![[0; MAX_IDS]; n_queries]", "first: vec![0; MAX_IDS * n_queries]")
+        evaluation = evaluation.replace("let mut slots = self.first[query][seen..].iter_mut();", "let mut seen = seen;")
+        evaluation = evaluation.replace("let Some(slot) = slots.next() else { return };\n                *slot = (block_start + i as u32 * 64 + rest.trailing_zeros()) as u16;",
+            """if seen == MAX_IDS { return }
+                self.first[seen * self.count.len() + query] = (block_start + i as u32 * 64 + rest.trailing_zeros()) as u16;
+                seen += 1;""")
+        evaluation = evaluation.replace("self.first[query][seen] = doc;", "self.first[seen * self.count.len() + query] = doc;")
+        output = folder / "src/output.rs"
+        output.write_text(output.read_text().replace("for &doc in &shard.first[q][..take] {",
+            "for rank in 0..take {\n                let doc = shard.first[rank * shard.count.len() + q];"))
+    if variant in {"hash64", "columns-hash"}:
+        terms = folder / "src/terms.rs"
+        terms.write_text(terms.read_text().replace(
+            "self.0[0].wrapping_mul(A) ^ self.0[1].wrapping_mul(B)", "self.0[0].wrapping_mul(A)"))
+    if variant in {"phase", "phase4", "phase32", "phasefast"}:
         main = (folder / "src/main.rs").read_text()
         begin = main.index("    let totals: Vec<_> = thread::scope")
         main = main[:begin] + '    fs::write(out.join("results.txt"), phase::run(&plan, docs, threads))\n}\n'
         main = main.replace("mod classify;", "mod phase;\nmod classify;")
         (folder / "src/main.rs").write_text(main)
         phase_source = Path(__file__).with_name("phase.rs").read_text()
-        size = {"phase": 16384, "phase4": 4096, "phase32": 32768}[variant]
+        size = {"phase": 16384, "phase4": 4096, "phase32": 32768, "phasefast": 16384}[variant]
         phase_source = phase_source.replace("const PHASE: usize = 16384;", f"const PHASE: usize = {size};")
+        if variant == "phasefast":
+            phase_source = phase_source.replace(
+                "    for phase in (0..documents).step_by(PHASE) {",
+                """    let dense_storage = crate::huge_slice(plan.n_dense as usize * (PHASE / 64), 0u64);
+    for phase in (0..documents).step_by(PHASE) {""")
+            phase_source = phase_source.replace(
+                """        let stride = count.div_ceil(64);
+        let workers = threads.max(1).min(stride);
+        let mut dense = vec![0u64; plan.n_dense as usize * stride];""",
+                """        let stride = PHASE / 64;
+        let groups = count.div_ceil(512);
+        let workers = threads.max(1).min(groups);
+        let dense = &mut *dense_storage;
+        dense.fill(0);""")
+            phase_source = phase_source.replace("stride * worker / workers * 64", "groups * worker / workers * 512")
+            phase_source = phase_source.replace("stride * (worker + 1) / workers * 64", "groups * (worker + 1) / workers * 512")
+            begin = phase_source.index("fn stats(")
+            end = phase_source.index("fn evaluate(", begin)
+            stats = phase_source[begin:end]
+            stats = stats.replace("Vec<u32>", "[u32; MAX_IDS]")
+            stats = stats.replace("let mut first = Vec::with_capacity(MAX_IDS);", "let mut first = [0; MAX_IDS];\n    let mut seen = 0;")
+            stats = stats.replace("first.len()", "seen")
+            stats = stats.replace("first.push(base + i as u32 * 256 + j as u32 * 64 + rest.trailing_zeros());",
+                                  "first[seen] = base + i as u32 * 256 + j as u32 * 64 + rest.trailing_zeros();\n                    seen += 1;")
+            phase_source = phase_source[:begin] + stats + phase_source[end:]
         (folder / "src/phase.rs").write_text(phase_source)
         scan = scan.replace("fn find_token_edges(", "pub(crate) fn find_token_edges(")
         scan = scan.replace("fn hash_tokens(", "pub(crate) fn hash_tokens(")
@@ -68,7 +109,7 @@ def apply(folder, variant):
         begin = scan.index("/// Finds each token's home")
         end = scan.index("/// Turns tokens into term ids", begin)
         scan = scan[:begin] + scan[end:]
-    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined", "phase", "phase4", "phase32"}:
+    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined", "phase", "phase4", "phase32", "phasefast", "columns", "hash64", "columns-hash"}:
         raise ValueError(variant)
     (folder / "src/scan.rs").write_text(scan)
     (folder / "src/eval.rs").write_text(evaluation)
