@@ -3,6 +3,7 @@
 //!
 //!     solution [data_dir] [out_dir] [threads]
 
+mod arena;
 mod classify;
 mod eval;
 mod output;
@@ -15,6 +16,9 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::ptr::null_mut;
 use std::{env, io, slice, thread};
+
+#[global_allocator]
+static ARENA: arena::Arena = arena::Arena;
 
 /// Using fewer shards than this could overflow the 16-bit local document numbers.
 const MIN_SHARDS: usize = 12;
