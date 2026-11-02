@@ -1,7 +1,7 @@
 //! One pass over a shard of `docs.txt`, answering every query as it goes.
 
 use crate::classify::{CHUNK, classify};
-use crate::eval::{Totals, evaluate};
+use crate::eval::{BLOCK, Totals, Word, evaluate, evaluate_form};
 use crate::queries::Compiled;
 use crate::terms::Key;
 
@@ -48,46 +48,78 @@ fn parse_id(bytes: &[u8], mut at: usize) -> (u32, usize) {
     (id, at)
 }
 
-/// The BOOL terms of the current block of 64 documents. `words[t]` has bit `i` set if document
-/// `i` of the block contains term `t`. The first `n_touched` entries of `touched` list the
-/// terms whose word is not zero. A term enters once per block at most, but every token writes
-/// to the next free entry, so `touched` needs one entry more than there are ids. `pending`
-/// is a bitset of BOOL queries, kept here so that a flush needs no allocation.
+/// The BOOL terms of the current block. `slots[t]` says which entry of `words` holds term `t`.
+/// A dense term always has entry `t`. A rare term has `absent`, which stays all zero, until it
+/// first occurs in the block and takes the next free entry. Such a term is listed in `rare`,
+/// and each token writes to the next free place there, so `rare` needs one more place than
+/// there are rare terms. Misses and terms with no BOOL query all share one entry, which nothing
+/// reads. `pending` is a bitset of BOOL queries, kept here so that a flush needs no allocation.
 struct Block {
-    words: Vec<u64>,
-    touched: Vec<u32>,
-    n_touched: usize,
+    words: Vec<Word>,
+    slots: Vec<u32>,
+    rare: Vec<u32>,
+    n_rare: usize,
     pending: Vec<u64>,
+    absent: u32,
 }
 
 impl Block {
-    /// Evaluates each query that one of this block's terms can trigger, then clears the block.
+    fn new(plan: &Compiled) -> Self {
+        let (n_dense, n_bool_terms) = (plan.n_dense, plan.n_bool_terms);
+        let absent = n_dense + 1;
+        let mut slots: Vec<u32> = (0..n_dense).collect();
+        slots.resize(n_bool_terms as usize, absent);
+        slots.push(n_dense);
+        Block {
+            words: vec![[0; 4]; n_bool_terms as usize + 3],
+            slots,
+            rare: vec![0; (n_bool_terms - n_dense) as usize + 2],
+            n_rare: 0,
+            pending: vec![0; plan.n_bool / 64 + 1],
+            absent,
+        }
+    }
+
+    /// Runs every query this block can affect, then clears the block.
     ///
-    /// Marking the queries in a bitset first means a query with several cover terms runs only
-    /// once, and they run in memory order. A flush evaluates thousands of queries, each
-    /// touching several arrays, and reading those in order is what keeps the cache misses down.
-    fn flush(&mut self, plan: &Compiled, totals: &mut Totals, block: u16) {
-        let touched = &self.touched[..self.n_touched];
-        for &term in touched {
+    /// A query with a folded form runs on it unless one of its rare terms occurred. Those, and
+    /// the queries with no form, are marked in a bitset first, so a query runs only once.
+    fn flush(&mut self, plan: &Compiled, totals: &mut Totals, block: u32) {
+        let start = block * BLOCK as u32;
+        for &term in &self.rare[..self.n_rare] {
             for &query in plan.triggers.get(term) {
                 self.pending[query as usize / 64] |= 1 << (query % 64);
             }
         }
+        for (q, form) in plan.forms.iter().enumerate() {
+            let result = if self.pending[q / 64] >> (q % 64) & 1 == 0 {
+                evaluate_form(form, &self.words)
+            } else {
+                evaluate(&plan.queries[q], &self.words, &self.slots)
+            };
+            totals.add_block(q, &result, start);
+        }
+        let n_forms = plan.forms.len();
+        self.pending[..n_forms / 64].fill(0);
+        self.pending[n_forms / 64] &= !0 << (n_forms % 64);
         for (i, pending) in self.pending.iter_mut().enumerate() {
             let mut queries = std::mem::take(pending);
             while queries != 0 {
                 let q = i * 64 + queries.trailing_zeros() as usize;
                 queries &= queries - 1;
-                let result = evaluate(&plan.queries[q], &self.words);
-                if result != 0 {
-                    totals.add_word(q, result, block as u32 * 64);
+                let result = evaluate(&plan.queries[q], &self.words, &self.slots);
+                if result != [0; 4] {
+                    totals.add_block(q, &result, start);
                 }
             }
         }
-        for &term in touched {
-            self.words[term as usize] = 0;
+        let first_rare = self.absent as usize + 1;
+        self.words[..plan.n_dense as usize].fill([0; 4]);
+        self.words[first_rare..first_rare + self.n_rare].fill([0; 4]);
+        for &term in &self.rare[..self.n_rare] {
+            self.slots[term as usize] = self.absent;
         }
-        self.n_touched = 0;
+        self.n_rare = 0;
     }
 }
 
@@ -115,12 +147,7 @@ fn check_phrases(plan: &Compiled, ids: &[u32], at: usize, doc: u16, totals: &mut
 pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
     let (base, _) = parse_id(shard, 0);
     let mut totals = Totals::new(base, plan.queries.len());
-    let mut block = Block {
-        words: vec![0; plan.n_bool_terms as usize + 1],
-        touched: vec![0; plan.n_bool_terms as usize + 2],
-        n_touched: 0,
-        pending: vec![0; plan.n_bool.div_ceil(64)],
-    };
+    let mut block = Block::new(plan);
     let (mut edges, mut ids, mut anchored, mut keys) = (vec![], vec![], vec![], vec![]);
     let (mut at, mut doc) = (0, 0u16);
     while at < shard.len() {
@@ -129,6 +156,7 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         let line_end = find_token_edges(shard, tab + 1, &mut edges);
         at = line_end + 1;
 
+        let (part, bit) = (doc as usize / 64 % 4, 1u64 << (doc % 64));
         ids.clear();
         ids.resize(edges.len() / 2, 0);
         anchored.clear();
@@ -145,12 +173,15 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
             let found = plan.table.lookup(home, key, &shard[start..end]);
             *id = found.id();
             // Written without branches: whether a token is new to the block is unpredictable.
-            // Terms with no BOOL query and misses all share one word, which nothing reads.
-            let word_id = found.id().min(plan.n_bool_terms);
-            let word = &mut block.words[word_id as usize];
-            block.touched[block.n_touched] = word_id;
-            block.n_touched += (*word == 0) as usize;
-            *word |= 1 << (doc % 64);
+            let term = found.id().min(plan.n_bool_terms);
+            let slot = block.slots[term as usize];
+            let is_new = slot == block.absent;
+            let next = block.absent + 1 + block.n_rare as u32;
+            let slot = if is_new { next } else { slot };
+            block.slots[term as usize] = slot;
+            block.rare[block.n_rare] = term;
+            block.n_rare += is_new as usize;
+            block.words[slot as usize][part] |= bit;
             if found.is_anchor() {
                 anchored.push(position);
             }
@@ -159,13 +190,13 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
             check_phrases(plan, &ids, position, doc, &mut totals);
         }
 
-        if doc % 64 == 63 {
-            block.flush(plan, &mut totals, doc / 64);
+        if doc as usize % BLOCK == BLOCK - 1 {
+            block.flush(plan, &mut totals, doc as u32 / BLOCK as u32);
         }
         doc = doc.wrapping_add(1);
     }
-    if doc % 64 != 0 {
-        block.flush(plan, &mut totals, doc / 64);
+    if doc as usize % BLOCK != 0 {
+        block.flush(plan, &mut totals, doc as u32 / BLOCK as u32);
     }
     totals
 }
