@@ -69,8 +69,10 @@ fn main() -> io::Result<()> {
         .get(3)
         .map_or(cores.max(MIN_SHARDS), |s| s.parse().expect("thread count"));
 
+    let t0 = std::time::Instant::now();
     let docs = map_file(&data.join("docs.txt"))?;
     let plan = queries::compile(map_file(&data.join("queries.txt"))?);
+    let t1 = t0.elapsed();
 
     let totals: Vec<_> = thread::scope(|scope| {
         let plan = &plan;
@@ -84,6 +86,11 @@ fn main() -> io::Result<()> {
             .collect()
     });
 
+    let t2 = t0.elapsed();
     let results = output::format_results(&totals, &plan.position_of_line);
-    fs::write(out.join("results.txt"), results)
+    let t3 = t0.elapsed();
+    let done = fs::write(out.join("results.txt"), results);
+    let t4 = t0.elapsed();
+    eprintln!("PHASE compile {:?} scan {:?} format {:?} write {:?} total {:?}", t1, t2 - t1, t3 - t2, t4 - t3, t4);
+    done
 }
