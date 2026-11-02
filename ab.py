@@ -30,7 +30,7 @@ hashes = set()
 for r in range(13):
     for c in commits:
         t = time.monotonic()
-        run = subprocess.run([bins[c], "data", "out", "4"], check=True, stderr=subprocess.PIPE, text=True)
+        run = subprocess.run([bins[c], "data", "out", "12"], check=True, stderr=subprocess.PIPE, text=True)
         times[c].append(time.monotonic() - t)
         for name, value, unit in re.findall(r"(\w+) ([\d.]+)(ms|µs|s)\b", run.stderr):
             phases[c].setdefault(name, []).append(float(value) * {"ms": 1, "µs": 0.001, "s": 1000}[unit])
