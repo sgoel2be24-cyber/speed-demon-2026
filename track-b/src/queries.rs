@@ -10,7 +10,7 @@ pub const MAX_TERMS: usize = 8;
 /// A BOOL term used at least this often in `queries.txt` is dense: it gets a place in a small
 /// array that stays in cache. How often a term appears in the file is a good, free guide to
 /// how common it is in the corpus, and this affects speed only, never an answer.
-const DENSE_USES: u64 = 4;
+const DENSE_USES: u64 = 3;
 
 #[derive(Clone, Copy, Default)]
 pub enum Op {
