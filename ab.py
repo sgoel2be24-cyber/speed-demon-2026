@@ -1,5 +1,5 @@
 """Build each commit in ab.txt, then alternate runs on seed 2 so all see the same machine."""
-import hashlib, os, re, statistics, subprocess, sys, time
+import hashlib, os, re, resource, statistics, subprocess, sys, time
 commits = open("ab.txt").read().split()
 bins = {}
 SYS = subprocess.run(["rustc", "--print", "sysroot"], capture_output=True, text=True).stdout.strip()
@@ -43,4 +43,6 @@ for c in commits:
     m = statistics.median(v)
     base = base or m
     print(f"{c[:8]} median {m*1000:7.1f} ms  min {v[0]*1000:7.1f} ms  ratio {m/base:.3f}")
+    peak = subprocess.run(["/usr/bin/time", "-f", "%M", bins[c], "data", "out", "12"], capture_output=True, text=True).stderr.split()[-1]
+    print(f"   peak {int(peak)/1024:.1f} MB")
     print("   phases " + " ".join(f"{k} {statistics.median(x):.1f}" for k, x in phases[c].items()))
