@@ -1,5 +1,5 @@
 //! One pass over a shard of `docs.txt`, answering every query as it goes.
-const STAGE: u32 = 7;
+const STAGE: u32 = 6;
 
 use crate::classify::{CHUNK, classify};
 use crate::eval::prefetch;
