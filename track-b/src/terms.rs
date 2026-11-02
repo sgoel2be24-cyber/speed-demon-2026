@@ -103,7 +103,7 @@ impl Line {
 }
 
 /// Bits in the filter's index. 2^14 words of 64 bits is 128 KB, small enough to stay in L2.
-const FILTER_BITS: u32 = 14;
+const FILTER_BITS: u32 = 13;
 
 /// Hash table from term bytes to a dense id: four entries to a line, with terms inserted
 /// busiest first, so busy terms sit in their home line.
