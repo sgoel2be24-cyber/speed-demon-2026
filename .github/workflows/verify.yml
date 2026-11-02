@@ -13,7 +13,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: lscpu | grep -E 'Model name|^CPU\(s\)'
+      - run: lscpu | grep -E 'Model name|^CPU\(s\)|L1d|L2|L3'
+      - run: sudo apt-get install -y -q linux-tools-common linux-tools-$(uname -r) || true
       - run: |
           rustup toolchain install 1.99.1 --profile minimal
           rustup default 1.99.1

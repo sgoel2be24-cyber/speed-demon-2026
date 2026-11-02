@@ -1,5 +1,5 @@
 """Build each commit in ab.txt, then alternate runs on seed 2 so all see the same machine."""
-import hashlib, os, statistics, subprocess, time
+import hashlib, os, re, statistics, subprocess, sys, time
 commits = open("ab.txt").read().split()
 bins = {}
 SYS = subprocess.run(["rustc", "--print", "sysroot"], capture_output=True, text=True).stdout.strip()
@@ -25,12 +25,15 @@ for c in commits:
     bins[c] = f"{d}/target/release/solution"
 os.makedirs("out", exist_ok=True)
 times = {c: [] for c in commits}
+phases = {c: {} for c in commits}
 hashes = set()
 for r in range(13):
     for c in commits:
         t = time.monotonic()
-        subprocess.run([bins[c], "data", "out", "4"], check=True)
+        run = subprocess.run([bins[c], "data", "out", "4"], check=True, stderr=subprocess.PIPE, text=True)
         times[c].append(time.monotonic() - t)
+        for name, value, unit in re.findall(r"(\w+) ([\d.]+)(ms|µs|s)\b", run.stderr):
+            phases[c].setdefault(name, []).append(float(value) * {"ms": 1, "µs": 0.001, "s": 1000}[unit])
         if r == 0:
             hashes.add(hashlib.sha256(open("out/results.txt", "rb").read()).hexdigest())
 print("result hashes", hashes)
@@ -40,3 +43,6 @@ for c in commits:
     m = statistics.median(v)
     base = base or m
     print(f"{c[:8]} median {m*1000:7.1f} ms  min {v[0]*1000:7.1f} ms  ratio {m/base:.3f}")
+    print("   phases " + " ".join(f"{k} {statistics.median(x):.1f}" for k, x in phases[c].items()))
+for c in commits:
+    subprocess.run(["sudo", "perf", "stat", "-e", "cycles,instructions,branches,branch-misses,cache-references,cache-misses,L1-dcache-load-misses,dTLB-load-misses", bins[c], "data", "out", "4"])
