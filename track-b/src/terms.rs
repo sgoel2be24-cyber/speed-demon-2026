@@ -222,7 +222,7 @@ impl<'a> TermTable<'a> {
         order.sort_by_key(|&old| new_id[old]);
         self.keys.clear();
         self.empty = (old_terms.len() as u32) << 1;
-        self.reset_slots(old_terms.len() * 3);
+        self.reset_slots(old_terms.len() * 3 / 2);
         for old in order {
             self.intern(old_terms[old]);
         }
