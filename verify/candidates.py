@@ -6,6 +6,59 @@ def apply(folder, variant):
     folder = Path(folder)
     scan = (folder / "src/scan.rs").read_text()
     evaluation = (folder / "src/eval.rs").read_text()
+    if variant in {"shape", "staged-shape"}:
+        queries = folder / "src/queries.rs"
+        source = queries.read_text()
+        source = source.replace("Vec<(bool, u32, Reverse<u64>)>", "Vec<(u8, u32, Reverse<u64>)>")
+        source = source.replace("form.ops\n                    .iter()", "form.ops[..form.len.saturating_sub(1) as usize]\n                    .iter()")
+        source = source.replace("""            } else {
+                0
+            };
+            (!is_folded[line], shape, Reverse(evaluations[line]))""",
+        """            } else if query.is_phrase {
+                0
+            } else {
+                query.ops[..query.len as usize - 1].iter()
+                    .fold(query.len as u32, |shape, &op| shape * 3 + op as u32)
+            };
+            (u8::from(!is_folded[line]) + u8::from(query.is_phrase), shape, Reverse(evaluations[line]))""")
+        queries.write_text(source)
+    if variant in {"staged", "staged-shape"}:
+        terms = folder / "src/terms.rs"
+        terms.write_text(terms.read_text().replace("#[derive(Clone, Copy)]\npub struct Found", "#[derive(Clone, Copy, Default)]\npub struct Found"))
+        scan = scan.replace("use crate::terms::Key;", "use crate::terms::{Found, Key};")
+        marker = "/// Turns tokens into term ids"
+        helper = """#[inline(never)]
+fn lookup_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &[(usize, Key)], found: &mut [Found]) {
+    for (entry, (&[start, end], &(home, key))) in found.iter_mut().zip(tokens.iter().zip(keys)) {
+        *entry = plan.table.lookup(home, key, shard, start as usize, end as usize);
+    }
+}
+
+"""
+        scan = scan.replace(marker, helper + marker)
+        scan = scan.replace("""    shard: &[u8],
+    tokens: &[[u32; 2]],
+    keys: &[(usize, Key)],
+    ids: &mut [u32],""", """    found: &[Found],
+    ids: &mut [u32],""")
+        scan = scan.replace("let (table, n_dense, n_bool_terms) = (&plan.table, plan.n_dense, plan.n_bool_terms);", "let (n_dense, n_bool_terms) = (plan.n_dense, plan.n_bool_terms);")
+        old = """    for (position, ((id, &[start, end]), &(home, key))) in
+        ids.iter_mut().zip(tokens).zip(keys).enumerate()
+    {
+        let found = table.lookup(home, key, shard, start as usize, end as usize);"""
+        assert old in scan
+        scan = scan.replace(old, """    for (position, (id, &found)) in ids.iter_mut().zip(found).enumerate() {""")
+        scan = scan.replace("    let mut waiting = vec![];", "    let mut waiting = vec![];\n    let mut found = vec![];")
+        scan = scan.replace("            keys.resize(tokens.len(), (0, Key::default()));", "            keys.resize(tokens.len(), (0, Key::default()));\n            found.resize(tokens.len(), Found::default());")
+        scan = scan.replace("        hash_tokens(plan, shard, tokens, &mut keys);", "        hash_tokens(plan, shard, tokens, &mut keys);\n        lookup_tokens(plan, shard, tokens, &keys, &mut found);")
+        scan = scan.replace("""            plan,
+            shard,
+            tokens,
+            &keys,
+            ids,""", """            plan,
+            &found[..tokens.len()],
+            ids,""")
     if variant in {"columns", "columns-hash"}:
         evaluation = evaluation.replace("pub first: Vec<[u16; MAX_IDS]>", "pub first: Vec<u16>")
         evaluation = evaluation.replace("first: vec![[0; MAX_IDS]; n_queries]", "first: vec![0; MAX_IDS * n_queries]")
@@ -109,7 +162,7 @@ def apply(folder, variant):
         begin = scan.index("/// Finds each token's home")
         end = scan.index("/// Turns tokens into term ids", begin)
         scan = scan[:begin] + scan[end:]
-    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined", "phase", "phase4", "phase32", "phasefast", "columns", "hash64", "columns-hash"}:
+    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined", "phase", "phase4", "phase32", "phasefast", "columns", "hash64", "columns-hash", "staged", "shape", "staged-shape"}:
         raise ValueError(variant)
     (folder / "src/scan.rs").write_text(scan)
     (folder / "src/eval.rs").write_text(evaluation)

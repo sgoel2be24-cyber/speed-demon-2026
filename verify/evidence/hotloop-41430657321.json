@@ -1,0 +1,88 @@
+{
+  "run_id": 41430657321,
+  "job_id": 125228104557,
+  "source": "https://github.com/sgoel2be24-cyber/speed-demon-2026/actions/runs/41430657321",
+  "scope": "Runner medians from 9 measured rounds per held-out full seed, randomized alternating order; not scoring-box measurements.",
+  "all_candidate_hashes_fuzz_and_regressions_passed": true,
+  "summary": {
+    "baseline/12": {
+      "median_seconds": {
+        "2": 0.5675704329999007,
+        "3": 0.546949695999956
+      },
+      "mean_ratio_to_baseline": 1
+    },
+    "nonzero/12": {
+      "median_seconds": {
+        "2": 0.5974895130000277,
+        "3": 0.5600743610000336
+      },
+      "mean_ratio_to_baseline": 1.038355206631174
+    },
+    "sparse/12": {
+      "median_seconds": {
+        "2": 0.6491615420000016,
+        "3": 0.6101672739999913
+      },
+      "mean_ratio_to_baseline": 1.1296685538107254
+    },
+    "fused/12": {
+      "median_seconds": {
+        "2": 0.6041008060000195,
+        "3": 0.5816030760000785
+      },
+      "mean_ratio_to_baseline": 1.0638601199796092
+    },
+    "combined/12": {
+      "median_seconds": {
+        "2": 0.6644035230000327,
+        "3": 0.6378134210000326
+      },
+      "mean_ratio_to_baseline": 1.1683689707645502
+    },
+    "baseline-full-pgo/12": {
+      "median_seconds": {
+        "2": 0.5841812589999336,
+        "3": 0.5538827839999385
+      },
+      "mean_ratio_to_baseline": 1.0209712304683294
+    },
+    "combined-full-pgo/12": {
+      "median_seconds": {
+        "2": 0.6835264850000158,
+        "3": 0.6304883970000219
+      },
+      "mean_ratio_to_baseline": 1.1785190544390995
+    },
+    "baseline/6": {
+      "median_seconds": {
+        "2": 0.5346518940000351,
+        "3": 0.5069781079999984
+      },
+      "mean_ratio_to_baseline": 0.9344600201633282
+    },
+    "baseline/24": {
+      "median_seconds": {
+        "2": 0.6181361430000152,
+        "3": 0.6232961690000138
+      },
+      "mean_ratio_to_baseline": 1.1143387145160586
+    },
+    "combined/6": {
+      "median_seconds": {
+        "2": 0.6117283840000027,
+        "3": 0.5915547070000002
+      },
+      "mean_ratio_to_baseline": 1.0796770105273275
+    },
+    "combined/24": {
+      "median_seconds": {
+        "2": 0.7249351739999383,
+        "3": 0.70654816199999
+      },
+      "mean_ratio_to_baseline": 1.284528812999517
+    }
+  },
+  "memory_samples_from_log": []
+}
+

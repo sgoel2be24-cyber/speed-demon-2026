@@ -1,0 +1,92 @@
+{
+  "run_id": 41432012014,
+  "job_id": 125232619100,
+  "source": "https://github.com/sgoel2be24-cyber/speed-demon-2026/actions/runs/41432012014",
+  "scope": "Runner medians from 9 measured rounds per held-out full seed, randomized alternating order; not scoring-box measurements.",
+  "all_candidate_hashes_fuzz_and_regressions_passed": true,
+  "summary": {
+    "baseline/12": {
+      "median_seconds": {
+        "2": 0.586019907999912,
+        "3": 0.6050841109999965
+      },
+      "mean_ratio_to_baseline": 1
+    },
+    "phase4/12": {
+      "median_seconds": {
+        "2": 0.9283573380000689,
+        "3": 0.9373821420000468
+      },
+      "mean_ratio_to_baseline": 1.566675157164212
+    },
+    "phase/12": {
+      "median_seconds": {
+        "2": 0.8258133880000287,
+        "3": 0.8118846859999849
+      },
+      "mean_ratio_to_baseline": 1.3754808032180343
+    },
+    "phase32/12": {
+      "median_seconds": {
+        "2": 0.8383449890000065,
+        "3": 0.7904442179999478
+      },
+      "mean_ratio_to_baseline": 1.3684560003791133
+    },
+    "baseline-full-pgo/12": {
+      "median_seconds": {
+        "2": 0.5955288960000189,
+        "3": 0.5794626240000298
+      },
+      "mean_ratio_to_baseline": 0.9869413561636963
+    },
+    "phase-full-pgo/12": {
+      "median_seconds": {
+        "2": 0.8364819989999432,
+        "3": 0.8280953429999727
+      },
+      "mean_ratio_to_baseline": 1.3979787792663212
+    },
+    "baseline/6": {
+      "median_seconds": {
+        "2": 0.5202446519999739,
+        "3": 0.5379283380000288
+      },
+      "mean_ratio_to_baseline": 0.8883867506179544
+    },
+    "baseline/24": {
+      "median_seconds": {
+        "2": 0.6125490839999657,
+        "3": 0.6178972500000555
+      },
+      "mean_ratio_to_baseline": 1.0332229458025877
+    },
+    "phase/6": {
+      "median_seconds": {
+        "2": 0.7431215440000187,
+        "3": 0.788471043999948
+      },
+      "mean_ratio_to_baseline": 1.2855795916816102
+    },
+    "phase/24": {
+      "median_seconds": {
+        "2": 0.8769041209999386,
+        "3": 0.8638486900000544
+      },
+      "mean_ratio_to_baseline": 1.4620115860282783
+    }
+  },
+  "memory_samples_from_log": [
+    "2026-11-02T11:00:54.7430140Z baseline/12 {'sampled_peak_RssAnon_MiB': 35.9453125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:00:55.7562579Z phase4/12 {'sampled_peak_RssAnon_MiB': 41.44140625, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:00:56.6930742Z phase/12 {'sampled_peak_RssAnon_MiB': 38.37890625, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:00:57.6095336Z phase32/12 {'sampled_peak_RssAnon_MiB': 52.2578125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:00:58.2560391Z baseline-full-pgo/12 {'sampled_peak_RssAnon_MiB': 35.51953125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:00:59.1965304Z phase-full-pgo/12 {'sampled_peak_RssAnon_MiB': 38.71484375, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:00:59.7867978Z baseline/6 {'sampled_peak_RssAnon_MiB': 24.18359375, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:01:00.5221339Z baseline/24 {'sampled_peak_RssAnon_MiB': 58.54296875, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:01:01.3906490Z phase/6 {'sampled_peak_RssAnon_MiB': 34.078125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:01:02.3560241Z phase/24 {'sampled_peak_RssAnon_MiB': 58.0546875, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}"
+  ]
+}
+
