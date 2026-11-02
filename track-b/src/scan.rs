@@ -4,6 +4,8 @@ use crate::classify::{CHUNK, classify};
 use crate::eval::{Totals, evaluate};
 use crate::queries::Compiled;
 use crate::terms::Key;
+use std::fs::File;
+use std::os::unix::fs::FileExt;
 
 /// Finds where one document's tokens start and stop. `edges` receives the position of each
 /// change between token and separator, so tokens are its consecutive pairs. Returns the
@@ -108,21 +110,53 @@ fn check_phrases(plan: &Compiled, ids: &[u32], at: usize, doc: u16, totals: &mut
     }
 }
 
-/// Scans whole lines of `docs.txt` and returns each query's answer within them.
-///
-/// `shard` must end just after an LF. Local document numbers stay below `NEVER`, which is
-/// checked: at 250,000 documents and at least 12 shards they are around 21,000.
-pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
-    let (base, _) = parse_id(shard, 0);
-    let mut totals = Totals::new(base, plan.queries.len());
+/// How much of `docs.txt` a shard holds in memory at once. Small enough to stay in L2.
+const BUFFER: usize = 1 << 17;
+
+/// Reads the bytes at `offset..end` of `docs.txt` through a small buffer that is used again and
+/// again, and returns each query's answer within them. The range must hold whole lines.
+pub fn scan_shard(plan: &Compiled, file: &File, mut offset: u64, end: u64) -> Totals {
+    let mut buffer = vec![0u8; BUFFER];
+    let mut kept = 0;
+    let mut totals = Totals::new(0, plan.queries.len());
     let mut block = Block {
         words: vec![0; plan.n_bool_terms as usize + 1],
         touched: vec![0; plan.n_bool_terms as usize + 2],
         n_touched: 0,
         pending: vec![0; plan.n_bool.div_ceil(64)],
     };
+    let mut doc = 0u16;
+    let mut first = true;
+    while offset < end {
+        let want = ((end - offset) as usize).min(BUFFER - kept);
+        file.read_exact_at(&mut buffer[kept..kept + want], offset)
+            .expect("reading docs.txt");
+        offset += want as u64;
+        let filled = kept + want;
+        let lines = 1 + buffer[..filled]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .expect("a line fits the buffer");
+        if first {
+            totals.base = parse_id(&buffer, 0).0;
+            first = false;
+        }
+        scan_lines(plan, &buffer[..lines], &mut block, &mut totals, &mut doc);
+        buffer.copy_within(lines..filled, 0);
+        kept = filled - lines;
+    }
+    if doc % 64 != 0 {
+        block.flush(plan, &mut totals, doc / 64);
+    }
+    totals
+}
+
+/// Scans whole lines. Local document numbers stay below `NEVER`, which is checked: at 250,000
+/// documents and at least 12 shards they are around 21,000.
+fn scan_lines(plan: &Compiled, shard: &[u8], block: &mut Block, totals: &mut Totals, doc_at: &mut u16) {
+    let mut doc = *doc_at;
     let (mut edges, mut ids, mut anchored, mut keys) = (vec![], vec![], vec![], vec![]);
-    let (mut at, mut doc) = (0, 0u16);
+    let mut at = 0;
     while at < shard.len() {
         assert!(doc != crate::eval::NEVER, "too many documents in one shard");
         let (_, tab) = parse_id(shard, at);
@@ -156,16 +190,13 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
             }
         }
         for &position in &anchored {
-            check_phrases(plan, &ids, position, doc, &mut totals);
+            check_phrases(plan, &ids, position, doc, totals);
         }
 
         if doc % 64 == 63 {
-            block.flush(plan, &mut totals, doc / 64);
+            block.flush(plan, totals, doc / 64);
         }
         doc = doc.wrapping_add(1);
     }
-    if doc % 64 != 0 {
-        block.flush(plan, &mut totals, doc / 64);
-    }
-    totals
+    *doc_at = doc;
 }

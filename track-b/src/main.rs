@@ -74,11 +74,17 @@ fn main() -> io::Result<()> {
     let plan = queries::compile(map_file(&data.join("queries.txt"))?);
     let t1 = t0.elapsed();
 
+    let file = File::open(data.join("docs.txt"))?;
     let totals: Vec<_> = thread::scope(|scope| {
         let plan = &plan;
+        let file = &file;
         let workers: Vec<_> = shards(docs, threads)
             .into_iter()
-            .map(|shard| scope.spawn(move || scan::scan_shard(plan, shard)))
+            .map(|shard| {
+                let offset = shard.as_ptr() as u64 - docs.as_ptr() as u64;
+                let end = offset + shard.len() as u64;
+                scope.spawn(move || scan::scan_shard(plan, file, offset, end))
+            })
             .collect();
         workers
             .into_iter()
