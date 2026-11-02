@@ -223,7 +223,7 @@ impl<'a> TermTable<'a> {
         let old_terms = std::mem::take(&mut self.terms);
         self.keys.clear();
         self.empty = (old_terms.len() as u32) << 1;
-        self.reset_slots(old_terms.len() * 12);
+        self.reset_slots(old_terms.len() * 6);
         for &old in order {
             self.intern(old_terms[old as usize]);
         }
