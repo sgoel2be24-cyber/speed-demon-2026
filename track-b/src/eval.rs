@@ -159,7 +159,8 @@ pub struct Totals {
     pub last: Vec<u16>,
     pub count: Vec<u16>,
     pub sum: Vec<u32>,
-    pub first: Vec<[u16; MAX_IDS]>,
+    /// First ids by rank, so early matches use nearby entries across queries.
+    pub first: Vec<u16>,
 }
 
 impl Totals {
@@ -169,7 +170,7 @@ impl Totals {
             last: vec![NEVER; n_queries],
             count: vec![0; n_queries],
             sum: vec![0; n_queries],
-            first: vec![[0; MAX_IDS]; n_queries],
+            first: vec![0; MAX_IDS * n_queries],
         }
     }
 
@@ -193,13 +194,16 @@ impl Totals {
     }
 
     /// Fills a query's list of smallest ids.
-    fn add_first(&mut self, query: usize, seen: usize, word: &Word, block_start: u32) {
-        let mut slots = self.first[query][seen..].iter_mut();
+    fn add_first(&mut self, query: usize, mut seen: usize, word: &Word, block_start: u32) {
         for (i, &part) in word.iter().enumerate() {
             let mut rest = part;
             while rest != 0 {
-                let Some(slot) = slots.next() else { return };
-                *slot = (block_start + i as u32 * 64 + rest.trailing_zeros()) as u16;
+                if seen == MAX_IDS {
+                    return;
+                }
+                self.first[seen * self.count.len() + query] =
+                    (block_start + i as u32 * 64 + rest.trailing_zeros()) as u16;
+                seen += 1;
                 rest &= rest - 1;
             }
         }
@@ -210,7 +214,7 @@ impl Totals {
     pub fn add_doc(&mut self, query: usize, doc: u16) {
         let seen = self.count[query] as usize;
         if seen < MAX_IDS {
-            self.first[query][seen] = doc;
+            self.first[seen * self.count.len() + query] = doc;
         }
         self.count[query] += 1;
         self.sum[query] += doc as u32;

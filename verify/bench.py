@@ -25,18 +25,17 @@ def call(command, **kwargs):
     subprocess.run(command, check=True, **kwargs)
 
 
-def build(name, variant, training, workspace):
+def build(name, variant, training, workspace, source_ref):
     directory = workspace / name / "track-b"
     directory.mkdir(parents=True)
     # Export committed source so ignored build artifacts cannot affect a candidate.
-    archive = subprocess.check_output(["git", "archive", "HEAD:track-b"], cwd=ROOT)
+    ref = "HEAD" if variant == "entry" else source_ref
+    archive = subprocess.check_output(["git", "archive", f"{ref}:track-b"], cwd=ROOT)
     subprocess.run(["tar", "-x", "-C", str(directory)], input=archive, check=True)
-    apply(directory, variant)
+    if variant != "entry":
+        apply(directory, variant)
     kernel = directory.parent / "verify/kernel_test"
     shutil.copytree(ROOT / "verify/kernel_test", kernel, ignore=shutil.ignore_patterns("target"))
-    if "columns" in variant:
-        test = kernel / "src/lib.rs"
-        test.write_text(test.read_text().replace("assert_eq!(totals.first[0],", "let actual_first: [u16; 10] = std::array::from_fn(|rank| totals.first[rank * totals.count.len()]);\n        assert_eq!(actual_first,"))
     env = dict(os.environ, RUSTFLAGS="-C target-cpu=x86-64-v3", VERIFY_REQUIRE_AVX2="1")
     call(["cargo", "test", "--release", "--", "--nocapture"], cwd=kernel, env=env)
     profile = directory / "profile"
@@ -56,26 +55,31 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", required=True, type=pathlib.Path)
     parser.add_argument("--train-sample", required=True, type=pathlib.Path)
-    parser.add_argument("--train-full", required=True, type=pathlib.Path)
+    parser.add_argument("--train-full", type=pathlib.Path)
     parser.add_argument("--reference", required=True)
     parser.add_argument("--rounds", type=int, default=9)
     parser.add_argument("--variants", default="baseline,nonzero,sparse,fused,combined")
     parser.add_argument("--full-pgo", default="baseline,combined")
+    parser.add_argument("--source-ref", default="4a13116", help="fixed audited source for controls and generated candidates")
     args = parser.parse_args()
+    if args.full_pgo and args.train_full is None:
+        parser.error("--train-full is required when --full-pgo is non-empty")
     workspace = ROOT / ".out/bench"
     shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True)
     binaries = {}
     for variant in args.variants.split(","):
-        binaries[variant] = build(variant, variant, args.train_sample.resolve(), workspace)
+        binaries[variant] = build(variant, variant, args.train_sample.resolve(), workspace, args.source_ref)
     for variant in filter(None, args.full_pgo.split(",")):
-        binaries[variant + "-full-pgo"] = build(variant + "-full-pgo", variant, args.train_full.resolve(), workspace)
+        binaries[variant + "-full-pgo"] = build(variant + "-full-pgo", variant, args.train_full.resolve(), workspace, args.source_ref)
     candidates = [(name, 12) for name in binaries]
     candidates += [(name, threads) for name in ["baseline", "combined", "phase"] if name in binaries for threads in [6, 24]]
     if "columns-hash" in binaries:
         candidates.append(("columns-hash", 6))
     if "columns-hash-shape" in binaries:
         candidates.append(("columns-hash-shape", 6))
+    if "entry" in binaries:
+        candidates.append(("entry", 6))
     measurements = {f"{name}/{threads}": [] for name, threads in candidates}
     output = workspace / "output"
     output.mkdir()
@@ -118,7 +122,7 @@ def main():
                 for line in pathlib.Path(f"/proc/{proc.pid}/status").read_text().splitlines():
                     if line.startswith("RssAnon:"):
                         peak = max(peak, int(line.split()[1]))
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 pass
             time.sleep(0.001)
         assert proc.returncode == 0
@@ -129,6 +133,7 @@ def main():
     report = {"commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "timing_scope": "x86 runner process wall time, PGO builds; not scoring-box measurements",
               "rounds_per_seed": args.rounds, "expected_sha256": expected,
+              "baseline_source_ref": args.source_ref,
               "summary": summary, "measurements": measurements, "memory": memory, "all_checks_passed": False}
     (workspace / "results.json").write_text(json.dumps(report, indent=2) + "\n")
     for name, binary in binaries.items():

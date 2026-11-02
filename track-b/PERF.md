@@ -178,3 +178,11 @@ No new optimisation or board run was performed during the verification audit. Th
 Measured: byte-balanced shards could exceed 65,535 documents on a deliberately clustered short/long corpus, even at 12 threads, and abort. The correction bounds each shard using the dense input ids and splits only oversized parts. The reproducer has the full 250,000-document count and legal text, but its clustered distribution is unlike the generator's independent draws. No generated-seed failure has been observed. This is a correctness guard, with no measured board speed or source-size result yet. Verification evidence and exact commands are in the [verification audit](../verify/AUDIT.md).
 
 Human review remains pending. Before freeze, a teammate should check the recorded measurements and explain the key tradeoffs in their own words. The audit cannot attest to that understanding on the team's behalf.
+
+## Later optimisation attempt: target 82
+
+Measured on two-CPU GitHub x86 runners, alternating builds on full seeds 2 and 3: transposing first-id storage plus hashing the first key word improved median time by about 3.0% and 3.4% in two separate batches (`41433476834` and `41436541217`). Six workers instead of twelve improved runner medians by about 5–11% across batches. These are CI run IDs, not board run IDs; no board T/M/S or point gain is claimed for this candidate. Hash equality is never accepted without an exact key/token comparison.
+
+The larger original experiments lost: sparse tally and fused token/key preparation; shared-phase bitmap/posting designs at several phase sizes; and a standard-library hash-table backend. Query-shape ordering improved one standalone comparison, but combining it with the new layout/hash lost about 2% at twelve workers (`41438049364`), so that combination was removed. Full-size PGO training did not give a repeatable gain, and training remains sample seed 7.
+
+The current side-branch candidate therefore contains only the small layout/hash changes and six-worker container entrypoint. It retains all holdout/fuzz/sanitizer gates. The [optimisation log](../verify/OPTIMIZATION-82.md) holds the measured ratios, failed attempts and linked CI evidence. Scoring-box cache behaviour remains a hypothesis until the team authorises a board run. The historical 71.93-point run above belongs to the earlier code, not this candidate.

@@ -48,11 +48,11 @@ impl Key {
         self.0[1] & LONG == LONG
     }
 
+    /// The home uses eight bytes; exact key/token comparisons settle collisions.
     #[inline]
     fn hash(self) -> u64 {
         const A: u64 = 0x9E37_79B9_7F4A_7C15;
-        const B: u64 = 0xC2B2_AE3D_27D4_EB4F;
-        self.0[0].wrapping_mul(A) ^ self.0[1].wrapping_mul(B)
+        self.0[0].wrapping_mul(A)
     }
 }
 

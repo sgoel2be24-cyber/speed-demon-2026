@@ -98,7 +98,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True, help="folder holding tiny-seedN, sample-seedN, full-seedN")
     ap.add_argument("--levels", default="0,1,2,3,4")
-    ap.add_argument("--threads", default="1,2,3,7,12", help="thread counts for level 7")
+    ap.add_argument("--threads", default="1,2,3,6,7,12", help="thread counts for level 7")
     ap.add_argument("--repeats", type=int, default=20, help="repeat runs for level 7")
     args = ap.parse_args()
     if not os.path.exists(BINARY):

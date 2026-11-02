@@ -29,6 +29,23 @@ pub fn free_huge<T>(slice: &mut [T]) {
 mod tests {
     use super::*;
 
+    // The benchmark compares both the audited row layout and rank-major storage.
+    trait FirstIds {
+        fn first_query(&self, queries: usize) -> [u16; 10];
+    }
+
+    impl FirstIds for Vec<[u16; 10]> {
+        fn first_query(&self, _: usize) -> [u16; 10] {
+            self[0]
+        }
+    }
+
+    impl FirstIds for Vec<u16> {
+        fn first_query(&self, queries: usize) -> [u16; 10] {
+            std::array::from_fn(|rank| self[rank * queries])
+        }
+    }
+
     fn scalar(word: &eval::Word) -> (u32, u32) {
         let mut count = 0;
         let mut sum = 0;
@@ -109,7 +126,8 @@ mod tests {
         totals.add_block(0, &[u64::MAX, u64::MAX, u64::MAX, u64::MAX >> 1], 65280);
         assert_eq!(totals.count[0], 65535);
         assert_eq!(totals.sum[0], 65535 * 65534 / 2);
-        assert_eq!(totals.first[0], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        let actual_first = totals.first.first_query(totals.count.len());
+        assert_eq!(actual_first, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     }
 
     #[test]

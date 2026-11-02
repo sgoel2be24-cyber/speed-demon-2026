@@ -36,7 +36,8 @@ pub fn format_results(shards: &[Totals], position_of_line: &[u32]) -> Vec<u8> {
         let mut wanted = MAX_IDS;
         for shard in shards {
             let take = wanted.min(shard.count[q] as usize);
-            for &doc in &shard.first[q][..take] {
+            for rank in 0..take {
+                let doc = shard.first[rank * shard.count.len() + q];
                 out.push(b' ');
                 push_number(&mut out, (shard.base + doc as u32) as u64);
             }
