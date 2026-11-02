@@ -44,5 +44,3 @@ for c in commits:
     base = base or m
     print(f"{c[:8]} median {m*1000:7.1f} ms  min {v[0]*1000:7.1f} ms  ratio {m/base:.3f}")
     print("   phases " + " ".join(f"{k} {statistics.median(x):.1f}" for k, x in phases[c].items()))
-for c in commits:
-    subprocess.run(["sudo", "perf", "stat", "-e", "cycles,instructions,branches,branch-misses,cache-references,cache-misses,L1-dcache-load-misses,dTLB-load-misses", bins[c], "data", "out", "4"])
