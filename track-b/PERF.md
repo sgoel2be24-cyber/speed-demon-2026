@@ -14,6 +14,7 @@ Every step from the reference to the final version, each with the live-board run
 | 7 | Prefetch the term table's slots, one document at a time | run-a778f48fd086 | 0.294 | 40.1 | 654 | 67.64 |
 | 8 | Hash each token once, faster startup, smaller query record, words for BOOL terms only | run-39e060ff4f98 | 0.288 | 37.2 | 664 | 67.79 |
 | 9 | Profile-guided build, trained on generator output | run-4edd3e56a048 | 0.280 | 37.5 | 672 | 68.07 |
+| 10 | Dense terms, 256-document blocks, faster lookup, larger table on huge pages, parallel output | run-bbc0afa8b489 | 0.242 | 41.5 | 1,013 | 68.33 |
 
 ## What the data said before any code
 
@@ -116,6 +117,14 @@ The always-on list had been the review's first choice, on the grounds that it re
 Expected: evaluation is branch-heavy, so PGO should help. It gave 3.7% in the A/B job.
 
 Result: 0.280 s, the best run so far, for 8 more Dockerfile lines. The generator copy was not counted in S, as the rules promise, and the build took 40 s.
+
+## Step 10: dense terms and 256-document blocks
+
+A longer look at preprocessing found hidden costs a sampling profile cannot show: every token made a real `memcpy` call for 16 bytes, and table lookups were not inlined. It also moved the 5,769 most used terms into a small array, reduced queries to those terms, and enlarged the term table.
+
+Expected: 1.69 times faster, measured in the A/B job as 1,211 ms to 718 ms on a 2-core runner with correct output.
+
+Result: 0.242 s on the board, only 14% faster, for 341 more lines. See the note below on why the A/B job overstated it.
 
 ## Experiments that failed
 
