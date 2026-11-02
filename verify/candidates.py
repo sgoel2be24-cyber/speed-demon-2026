@@ -23,7 +23,7 @@ def apply(folder, variant):
             };
             (u8::from(!is_folded[line]) + u8::from(query.is_phrase), shape, Reverse(evaluations[line]))""")
         queries.write_text(source)
-    if variant in {"staged", "staged-shape"}:
+    if variant in {"staged", "staged-shape", "swiss-staged"}:
         terms = folder / "src/terms.rs"
         terms.write_text(terms.read_text().replace("#[derive(Clone, Copy)]\npub struct Found", "#[derive(Clone, Copy, Default)]\npub struct Found"))
         scan = scan.replace("use crate::terms::Key;", "use crate::terms::{Found, Key};")
@@ -75,16 +75,16 @@ fn lookup_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &[(us
         terms = folder / "src/terms.rs"
         terms.write_text(terms.read_text().replace(
             "self.0[0].wrapping_mul(A) ^ self.0[1].wrapping_mul(B)", "self.0[0].wrapping_mul(A)"))
-    if variant in {"phase", "phase4", "phase32", "phasefast"}:
+    if variant in {"phase", "phase4", "phase32", "phasefast", "phasequery", "phasequery-swiss"}:
         main = (folder / "src/main.rs").read_text()
         begin = main.index("    let totals: Vec<_> = thread::scope")
         main = main[:begin] + '    fs::write(out.join("results.txt"), phase::run(&plan, docs, threads))\n}\n'
         main = main.replace("mod classify;", "mod phase;\nmod classify;")
         (folder / "src/main.rs").write_text(main)
         phase_source = Path(__file__).with_name("phase.rs").read_text()
-        size = {"phase": 16384, "phase4": 4096, "phase32": 32768, "phasefast": 16384}[variant]
+        size = {"phase": 16384, "phase4": 4096, "phase32": 32768, "phasefast": 16384, "phasequery": 16384, "phasequery-swiss": 16384}[variant]
         phase_source = phase_source.replace("const PHASE: usize = 16384;", f"const PHASE: usize = {size};")
-        if variant == "phasefast":
+        if variant in {"phasefast", "phasequery", "phasequery-swiss"}:
             phase_source = phase_source.replace(
                 "    for phase in (0..documents).step_by(PHASE) {",
                 """    let dense_storage = crate::huge_slice(plan.n_dense as usize * (PHASE / 64), 0u64);
@@ -109,6 +109,48 @@ fn lookup_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &[(us
             stats = stats.replace("first.push(base + i as u32 * 256 + j as u32 * 64 + rest.trailing_zeros());",
                                   "first[seen] = base + i as u32 * 256 + j as u32 * 64 + rest.trailing_zeros();\n                    seen += 1;")
             phase_source = phase_source[:begin] + stats + phase_source[end:]
+        if variant in {"phasequery", "phasequery-swiss"}:
+            old = """        let present = term_present(query.terms[i], doc, plan, dense, stride, offsets, postings);
+        result = match query.ops[i - 1] {
+            Op::And => result && present,
+            Op::Or => result || present,
+            Op::Not => result && !present,
+        };"""
+            assert old in phase_source
+            phase_source = phase_source.replace(old, """        let present = || term_present(query.terms[i], doc, plan, dense, stride, offsets, postings);
+        result = match query.ops[i - 1] {
+            Op::And => result && present(),
+            Op::Or => result || present(),
+            Op::Not => result && !present(),
+        };""")
+            old = """        candidates.clear();
+        for &term in &query.terms[..query.len as usize] {"""
+            assert old in phase_source
+            phase_source = phase_source.replace(old, """        candidates.clear();
+        let mut cover = [0u32; 6];
+        cover[0] = query.terms[0];
+        let mut length = 1;
+        let cost = |term: u32| {
+            if term < plan.n_dense { usize::MAX / 8 }
+            else { let t = (term - plan.n_dense) as usize; offsets[t + 1] - offsets[t] }
+        };
+        if q >= plan.forms.len() {
+            for i in 1..query.len as usize {
+                let term = query.terms[i];
+                match query.ops[i - 1] {
+                    Op::And => {
+                        let current: usize = cover[..length].iter().map(|&t| cost(t)).sum();
+                        if cost(term) < current { cover[0] = term; length = 1; }
+                    }
+                    Op::Or => { cover[length] = term; length += 1; }
+                    Op::Not => {}
+                }
+            }
+        }
+        let watched = if q < plan.forms.len() || cover[..length].iter().any(|&t| t < plan.n_dense) {
+            &query.terms[..query.len as usize]
+        } else { &cover[..length] };
+        for &term in watched {""")
         (folder / "src/phase.rs").write_text(phase_source)
         scan = scan.replace("fn find_token_edges(", "pub(crate) fn find_token_edges(")
         scan = scan.replace("fn hash_tokens(", "pub(crate) fn hash_tokens(")
@@ -162,7 +204,12 @@ fn lookup_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &[(us
         begin = scan.index("/// Finds each token's home")
         end = scan.index("/// Turns tokens into term ids", begin)
         scan = scan[:begin] + scan[end:]
-    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined", "phase", "phase4", "phase32", "phasefast", "columns", "hash64", "columns-hash", "staged", "shape", "staged-shape"}:
+    if variant in {"swiss", "swiss-staged", "phasequery-swiss"}:
+        terms = folder / "src/terms.rs"
+        source = terms.read_text().split("/// Open-addressing hash table")[0]
+        source = source.replace("#[derive(Clone, Copy, Default, PartialEq)]", "#[derive(Clone, Copy, Default, PartialEq, Eq)]")
+        terms.write_text(source + Path(__file__).with_name("swiss.rs").read_text())
+    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined", "phase", "phase4", "phase32", "phasefast", "columns", "hash64", "columns-hash", "staged", "shape", "staged-shape", "swiss", "swiss-staged", "phasequery", "phasequery-swiss"}:
         raise ValueError(variant)
     (folder / "src/scan.rs").write_text(scan)
     (folder / "src/eval.rs").write_text(evaluation)

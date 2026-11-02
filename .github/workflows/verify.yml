@@ -9,6 +9,7 @@ on:
       - verify/bench.py
       - verify/candidates.py
       - verify/phase.rs
+      - verify/swiss.rs
       - .github/workflows/bench.yml
   workflow_dispatch:
 

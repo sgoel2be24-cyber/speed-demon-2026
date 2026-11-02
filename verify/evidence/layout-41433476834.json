@@ -1,0 +1,67 @@
+{
+  "run_id": 41433476834,
+  "source": "https://github.com/sgoel2be24-cyber/speed-demon-2026/actions/runs/41433476834",
+  "scope": "9 measured randomized rounds per full seed; x86 runner, not scoring box",
+  "all_candidate_hashes_fuzz_and_regressions_passed": true,
+  "summary": {
+    "baseline/12": {
+      "median_seconds": {
+        "2": 0.6960182930000656,
+        "3": 0.7381035930000053
+      },
+      "mean_ratio_to_baseline": 1
+    },
+    "columns/12": {
+      "median_seconds": {
+        "2": 0.6914877589999833,
+        "3": 0.7484315120000247
+      },
+      "mean_ratio_to_baseline": 1.0037416446068417
+    },
+    "hash64/12": {
+      "median_seconds": {
+        "2": 0.6892078779999338,
+        "3": 0.7160597230000576
+      },
+      "mean_ratio_to_baseline": 0.9801748139146309
+    },
+    "columns-hash/12": {
+      "median_seconds": {
+        "2": 0.6733800700000074,
+        "3": 0.7171263029999864
+      },
+      "mean_ratio_to_baseline": 0.9695270747923324
+    },
+    "phasefast/12": {
+      "median_seconds": {
+        "2": 0.9032401590000063,
+        "3": 0.948628650000046
+      },
+      "mean_ratio_to_baseline": 1.2914745044747904
+    },
+    "baseline/6": {
+      "median_seconds": {
+        "2": 0.6297314230000666,
+        "3": 0.657111848999989
+      },
+      "mean_ratio_to_baseline": 0.8975166197654709
+    },
+    "baseline/24": {
+      "median_seconds": {
+        "2": 0.7607193370000687,
+        "3": 0.7770856710000089
+      },
+      "mean_ratio_to_baseline": 1.0728863286515886
+    }
+  },
+  "memory_samples_from_log": [
+    "2026-11-02T11:12:17.3553598Z baseline/12 {'sampled_peak_RssAnon_MiB': 35.703125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:12:18.1664094Z columns/12 {'sampled_peak_RssAnon_MiB': 33.06640625, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:12:18.9477449Z hash64/12 {'sampled_peak_RssAnon_MiB': 35.765625, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:12:19.7269848Z columns-hash/12 {'sampled_peak_RssAnon_MiB': 33.01171875, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:12:20.7191900Z phasefast/12 {'sampled_peak_RssAnon_MiB': 40.125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:12:21.4351012Z baseline/6 {'sampled_peak_RssAnon_MiB': 24.17578125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:12:22.2477984Z baseline/24 {'sampled_peak_RssAnon_MiB': 58.390625, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}"
+  ]
+}
+

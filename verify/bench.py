@@ -72,6 +72,8 @@ def main():
         binaries[variant + "-full-pgo"] = build(variant + "-full-pgo", variant, args.train_full.resolve(), workspace)
     candidates = [(name, 12) for name in binaries]
     candidates += [(name, threads) for name in ["baseline", "combined", "phase"] if name in binaries for threads in [6, 24]]
+    if "columns-hash" in binaries:
+        candidates.append(("columns-hash", 6))
     measurements = {f"{name}/{threads}": [] for name, threads in candidates}
     output = workspace / "output"
     output.mkdir()
