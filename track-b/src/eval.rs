@@ -9,7 +9,7 @@ pub const MAX_IDS: usize = 10;
 pub const NEVER: u16 = u16::MAX;
 
 /// How many documents a part holds, as a power of two.
-pub const PART_BITS: u32 = 11 2048;
+pub const PART_BITS: u32 = 10 1024;
 pub const PART: usize = 1 << PART_BITS;
 
 /// One bit for each document of a part.
