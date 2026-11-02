@@ -1,6 +1,6 @@
 # Track B: performance log
 
-Every step from the reference to the final version, each with the live-board run ID that measured it.
+Every step from the reference to the last board-tested version, with the live-board run ID that measured it. These are historical measurements, not a board measurement of the later verification-branch shard fix.
 
 | Step | Change | Run ID | T (s) | M (MB) | S | Points |
 |---|---|---|---|---|---|---|
@@ -14,7 +14,7 @@ Every step from the reference to the final version, each with the live-board run
 | 7 | Prefetch the term table's slots, one document at a time | run-a778f48fd086 | 0.294 | 40.1 | 654 | 67.64 |
 | 8 | Hash each token once, faster startup, smaller query record, words for BOOL terms only | run-39e060ff4f98 | 0.288 | 37.2 | 664 | 67.79 |
 | 9 | Profile-guided build, trained on generator output | run-4edd3e56a048 | 0.280 | 37.5 | 672 | 68.07 |
-| 10 | Dense terms, 256-document blocks, faster lookup, larger table on huge pages, parallel output | run-6436c4919269 | 0.177 | 40.8 | 1,013 | 71.70 |
+| 10 | Dense terms, 256-document blocks, faster lookup, larger table on huge pages, parallel output | run-2ab5d862ba33 | 0.173507 | 41.05 | 1,013 | 71.93 |
 
 ## What the data said before any code
 
@@ -124,11 +124,25 @@ A longer look at preprocessing found hidden costs a sampling profile cannot show
 
 Expected: 1.69 times faster, measured in the A/B job as 1,211 ms to 718 ms on a 2-core runner with correct output.
 
-Result: three board runs of identical code gave 0.242 s (`run-bbc0afa8b489`), 0.196 s (`run-31d1ca5ada7b`) and 0.177 s (`run-6436c4919269`). After the first we nearly wrote this change off as 14% faster for 341 more lines, a net gain of 0.26 points. The later runs showed that was noise. The best run is 1.58 times faster than step 9 and worth 3.6 points, close to the 72.5 projected.
+Measured: five board runs have identical `track-b/src` trees. The public history records the commit and timestamp but does not include run IDs; IDs below come from the team's recorded board receipts. No ID is inferred for the fourth sample.
+
+| Commit | Board timestamp (UTC) | T (s) | M (MB) | S | Points | Recorded run ID |
+|---|---|---|---|---|---|---|
+| `c8490e4` | Nov 2, 04:03:17 | 0.241786 | 41.46 | 1,013 | 68.3275 | run-bbc0afa8b489 |
+| `7fd2f26` | Nov 2, 04:09:26 | 0.195804 | 40.86 | 1,013 | 70.6177 | run-31d1ca5ada7b |
+| `c8727c9` | Nov 2, 04:13:43 | 0.177282 | 40.84 | 1,013 | 71.6966 | run-6436c4919269 |
+| `258cfba` | Nov 2, 04:21:11 | 0.188694 | 40.91 | 1,013 | 71.0193 | not preserved |
+| `f8f1581` | Nov 2, 04:57:18 | 0.173507 | 41.05 | 1,013 | 71.9303 | run-2ab5d862ba33 |
+
+Source: [team board history](https://s3.amazonaws.com/raptors.dev/speeddemon.dev/2026/board/runs/update-293701.json), retrieved November 2. All five source trees are `7d3d6cd9dfaacb07e223df5b5639801b6e8c4413`. These are separate live-board observations, not the five quiet-box final-scoring runs. Their median is 0.188694 s; the best is 0.173507 s. The 0.241786-to-0.173507 spread alone cannot identify its cause.
+
+After the first run we nearly wrote this change off as 14% faster for 341 more lines, a net gain of 0.26 points. The later runs showed why one sample was inadequate. The best observed run is 1.61 times faster than step 9's 0.280 s and gains 3.86 points; it is not an estimate of the final holdout time.
 
 The lesson is the same as step 5, and we still nearly fell for it: never judge a change on one board run.
 
 ## Experiments that failed
+
+Unless a board ID is explicitly supplied, the results in this section are A/B runner measurements recorded during development, not live-board measurements. Their individual CI run IDs were not preserved in this log; they must not be invented or represented as board runs. The rejected always-on dense list does have a board receipt: `run-b3099aeb6722`, 0.300 s (see step 8).
 
 - **Writing token edges in bulk.** Tokenising looked slow for AVX2, so the loop writing edges one at a time was replaced with one writing 16 at a time, to avoid a mispredicted exit per chunk. It came out 2% slower than without it in the A/B job, so it was reverted.
 - **Populating the file mapping up front.** The idea was that page faults were a hidden cost. No change in the A/B job, on a 2-core runner. The board has more threads, so it could still differ there.
@@ -150,8 +164,17 @@ A sampling profile of step 7, on a GitHub x86-64 runner, share of CPU time:
 | Per-token loop: setting term words | 16% |
 | Phrase checks | 3% |
 
-Kernel time barely shows, which rules out page faults on this runner. After this, small changes to the existing loops stopped paying, and several made things worse. Going much further needs a different shape for lookup or evaluation, not more tuning. Line count matters less than it first seemed: at about 1,000 lines, 100 fewer are worth about 0.34 points, the same as 3% more speed.
+Kernel time barely shows in that sample; it does not rule out page-fault costs on other machines or builds. This profile predates step 10 and must not be treated as the current CPU split. After this, small changes to the existing loops stopped paying, and several made things worse. Going much further needs a different shape for lookup or evaluation, not more tuning. Line count matters less than it first seemed: at about 1,000 lines, 100 fewer are worth about 0.34 points, the same as 3% more speed.
 
-## Experiments still to try on the board
+## Unmeasured hypotheses
 
-- Evaluating dense queries on every block from a plain list. Step 6 gets much of the same effect without the extra list.
+- A smaller table might behave differently on the scoring box's shared cache. The half-size table already lost on A/B runners, so this is not evidence for changing it.
+- Training PGO on `full` instead of `sample` might change speed. Both are valid generator output; neither is an answer source. The current build remains trained on `sample` seed 7.
+
+No new optimisation or board run was performed during the verification audit. The discarded always-on dense list is not an outstanding experiment.
+
+## Verification-branch correction
+
+Measured: byte-balanced shards could exceed 65,535 documents on a deliberately clustered short/long corpus, even at 12 threads, and abort. The correction bounds each shard using the dense input ids and splits only oversized parts. The reproducer has the full 250,000-document count and legal text, but its clustered distribution is unlike the generator's independent draws. No generated-seed failure has been observed. This is a correctness guard, with no measured board speed or source-size result yet. Verification evidence and exact commands are in the [verification audit](../verify/AUDIT.md).
+
+Human review remains pending. Before freeze, a teammate should check the recorded measurements and explain the key tradeoffs in their own words. The audit cannot attest to that understanding on the team's behalf.

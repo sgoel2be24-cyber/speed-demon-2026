@@ -14,9 +14,9 @@ Evaluating all 31,000 queries on every block would be far too slow, so each quer
 
 How often a term appears in `queries.txt` turned out to be a good stand-in for how rare it is in the corpus, so choosing covers and anchors needs no corpus statistics at all.
 
-Scattered memory reads turned out to be the main cost on the scoring CPU, so the layout is built around avoiding them. Terms used at least four times in the queries are dense: their words sit in a small array that stays in cache. Each query with dense terms is folded to those terms alone, which is its exact meaning in any block that holds none of its rare terms, and that short form runs in every block. Only when a rare term occurs does the full query run instead, for that block. Rare terms take a place in a small arena only while they are in the block. The term table is larger than it needs to be, on huge pages where the system allows, because a hash collision turned out to cost more than a cache miss.
+The layout reduces scattered reads, a useful target in x86 runner profiles and A/B experiments. Frequently used BOOL terms get dense ids and contiguous 256-bit words. Compilation treats every rare term as absent and builds a folded form when that leaves an expression with dense terms. A query such as `a AND rare` has no such form, even if `a` is dense. A nonempty form runs in each block unless a watched rare term selects the full query instead. Queries without a form run only when triggered, and each BOOL query is evaluated at most once per block. Rare terms take a place in a small arena only while they are in the block. A larger term table reduced probing in runner measurements; huge pages reduce address-translation pressure where supported. Neither observation establishes the cause of live-board timing noise.
 
-Each thread keeps running totals for its own part of the corpus. The parts are in document order, so joining them gives each query's count, sum and ten smallest ids.
+Each thread keeps running totals for its own part of the corpus. The parts are in document order, so joining them gives each query's count, sum and ten smallest ids. Byte-balanced parts are also bounded to 65,535 documents each, because local ids and counts use 16 bits. A part with too many short documents is split further; unusually skewed text can therefore use more workers than the requested count.
 
 The binary is built with profile guidance, trained on the organisers' generator at build time on a seed other than the public one.
 
@@ -24,9 +24,13 @@ The binary is built with profile guidance, trained on the organisers' generator 
 
 None.
 
+## Verification
+
+The `verify` workflow builds from inside `track-b/` and checks that AVX2 is enabled, then compares every output with the organisers' reference on full seeds 1–3, sample seeds 1–9 and tiny seeds 1–50. It also checks the actual PGO Docker image on full seeds 2 and 3. Differential fuzz includes exact 256- and 512-document boundaries, and deterministic regressions cover the local-id limit and skewed shards. Tests stay outside the scored directory. See the [verification audit](../verify/AUDIT.md) for measured results, limitations and commands; the presence of a workflow alone is not a passing result.
+
 ## With another 24 hours
 
-- **Batched lookups.** Lookup and setting term words take about 41% of CPU, mostly waiting on cache misses one token at a time. Handling several tokens at once with AVX2 is the largest chance left.
-- **Table size on the scoring box.** The larger table won on test machines with far more L3 cache. With 12 threads sharing 24 MB, a smaller one may do better, but this needs several board runs per size to see through the noise.
+- **Batched lookups (hypothesis).** The older step-7 profile put lookup and word setting at about 41% of CPU. The dense-term patch changed the workload, so a fresh profile is needed before claiming the same share or predicting a gain from handling several tokens at once with AVX2.
+- **Table size on the scoring box (hypothesis).** The larger table won on test machines with far more L3 cache. With 12 threads sharing 24 MB, a smaller one may do better, but this needs several board runs per size to see through the noise.
 - **Fewer lines.** The entry grew to about 1,000 lines. Some of that can be simplified without losing speed.
-- **Hardware counters on the scoring machine.** The largest open question is why the leaders use about a quarter of this CPU time. Cache-miss counts per token would answer it directly, where this work had to infer them from timing.
+- **Hardware counters on the scoring machine (hypothesis).** The cause of the live-board timing spread is unresolved. Cache-miss and scheduling measurements could test the shared-cache and shard-imbalance hypotheses; the current timing observations cannot distinguish them.
