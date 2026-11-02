@@ -231,11 +231,8 @@ impl<'a> TermTable<'a> {
         let hash = key.hash();
         let (word, bits) = Self::filter_position(hash);
         let empty = self.lines.len() as u32 - 1;
-        let home = if self.filter[word] & bits == bits {
-            (hash >> self.shift) as u32
-        } else {
-            empty
-        };
+        let home = (hash >> self.shift) as u32;
+        let _ = (word, bits, empty);
         #[cfg(target_arch = "x86_64")]
         // SAFETY: `home` is the empty line or a hash shifted down to the table's size, and
         // prefetching has no effect other than on the cache.
