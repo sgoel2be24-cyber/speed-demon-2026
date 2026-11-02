@@ -1,8 +1,7 @@
 //! One pass over a shard of `docs.txt`, answering every query as it goes.
 
 use crate::classify::{CHUNK, classify};
-use crate::eval::prefetch;
-use crate::eval::{BLOCK, Totals, Word, evaluate, evaluate_form};
+use crate::eval::{Bits, PART, PART_BITS, Postings, Totals, evaluate};
 use crate::queries::Compiled;
 use crate::terms::Key;
 
@@ -52,92 +51,146 @@ fn parse_id(bytes: &[u8], mut at: usize) -> (u32, usize) {
     (id, at)
 }
 
-/// How many queries ahead a flush starts loading what a query needs.
-const AHEAD: usize = 8;
-
-/// The BOOL terms of the current block. `slots[t]` says which entry of `words` holds term `t`.
-/// A dense term always has entry `t`. A rare term has `absent`, which stays all zero, until it
-/// first occurs in the block and takes the next free entry. Such a term is listed in `rare`,
-/// and each token writes to the next free place there, so `rare` needs one more place than
-/// there are rare terms. Misses and terms with no BOOL query all share one entry, which nothing
-/// reads. `pending` is a bitset of BOOL queries, kept here so that a flush needs no allocation.
-struct Block {
-    words: Vec<Word>,
-    slots: Vec<u32>,
-    rare: Vec<u32>,
-    n_rare: usize,
+/// What a thread knows about the current part of its shard, until the part is answered.
+///
+/// A dense term sets a bit, which any number of repeats can do at once. A rare term goes into
+/// `log`, which is cheap to write because it is written in order. `index` then sorts the log
+/// by term, which gives each rare term a list running from `starts[t]` to `ends[t]` in `lists`.
+struct Part {
+    dense: Vec<Bits>,
+    log: Vec<u32>,
+    n_log: usize,
+    starts: Vec<u32>,
+    ends: Vec<u32>,
+    lists: Vec<u16>,
     pending: Vec<u64>,
-    queue: Vec<u32>,
-    absent: u32,
+    result: Box<Bits>,
+    scratch: Box<Bits>,
 }
 
-impl Block {
-    fn new(plan: &Compiled) -> Self {
-        let (n_dense, n_bool_terms) = (plan.n_dense, plan.n_bool_terms);
-        let absent = n_dense + 1;
-        let mut slots: Vec<u32> = (0..n_dense).collect();
-        slots.resize(n_bool_terms as usize, absent);
-        slots.push(n_dense);
-        Block {
-            words: vec![[0; 4]; n_bool_terms as usize + 3],
-            slots,
-            rare: vec![0; (n_bool_terms - n_dense) as usize + 2],
-            n_rare: 0,
+impl Part {
+    /// `log` and `lists` have room for every token a shard could hold, because a token takes
+    /// at least two bytes. Memory that is never written costs nothing, so this is safe to
+    /// oversize, and it saves a check on every document.
+    fn new(plan: &Compiled, shard_len: usize) -> Self {
+        let terms = plan.n_bool_terms as usize;
+        Part {
+            // One more than there are dense terms: every other token sets that spare entry.
+            dense: vec![[0; PART / 64]; plan.n_dense as usize + 1],
+            log: vec![0; shard_len / 2 + 1],
+            n_log: 0,
+            starts: vec![0; terms],
+            ends: vec![0; terms],
+            lists: vec![0; shard_len / 2 + 1],
             pending: vec![0; plan.n_bool / 64 + 1],
-            queue: vec![],
-            absent,
+            result: Box::new([0; PART / 64]),
+            scratch: Box::new([0; PART / 64]),
         }
     }
 
-    /// Runs every query this block can affect, then clears the block.
-    ///
-    /// A query with a folded form runs on it unless one of its rare terms occurred. Those, and
-    /// the queries with no form, are marked in a bitset first, so a query runs only once.
-    fn flush(&mut self, plan: &Compiled, totals: &mut Totals, block: u32) {
-        let start = block * BLOCK as u32;
-        for &term in &self.rare[..self.n_rare] {
-            for &query in plan.triggers.get(term) {
-                self.pending[query as usize / 64] |= 1 << (query % 64);
+    /// Turns tokens into term ids and records them for the document at offset `doc` of the
+    /// part. It has no branch on the kind of term, which is close to a coin flip for each token.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn add_tokens(
+        &mut self,
+        plan: &Compiled,
+        shard: &[u8],
+        tokens: &[[u32; 2]],
+        keys: &[(usize, Key)],
+        ids: &mut [u32],
+        anchored: &mut Vec<usize>,
+        doc: usize,
+    ) {
+        let (word, bit) = (doc / 64, 1u64 << (doc % 64));
+        let (n_dense, n_bool_terms) = (plan.n_dense, plan.n_bool_terms);
+        let (dense, log) = (&mut self.dense[..], &mut self.log[..]);
+        let mut n_log = self.n_log;
+        for (position, ((id, &[start, end]), &(home, key))) in
+            ids.iter_mut().zip(tokens).zip(keys).enumerate()
+        {
+            let found = plan
+                .table
+                .lookup(home, key, shard, start as usize, end as usize);
+            let term = found.id();
+            *id = term;
+            // SAFETY: `dense` has an entry for `n_dense`, `word` is below the length of `Bits`
+            // because `doc` is below `PART`, and `log` has room for every token of the shard.
+            unsafe {
+                *dense
+                    .get_unchecked_mut(term.min(n_dense) as usize)
+                    .get_unchecked_mut(word) |= bit;
+                *log.get_unchecked_mut(n_log) = term << PART_BITS | doc as u32;
+            }
+            n_log += (term >= n_dense && term < n_bool_terms) as usize;
+            if found.is_anchor() {
+                anchored.push(position);
             }
         }
-        for (q, form) in plan.forms.iter().enumerate() {
-            if self.pending[q / 64] >> (q % 64) & 1 == 0 {
-                totals.add_block(q, &evaluate_form(form, &self.words), start);
+        self.n_log = n_log;
+    }
+
+    /// Sorts the log into one list for each rare term. The log is in document order, so each
+    /// list comes out sorted, and a term repeated in a document is next to itself.
+    fn index(&mut self, plan: &Compiled) {
+        let log = &self.log[..self.n_log];
+        self.starts.fill(0);
+        for &entry in log {
+            self.starts[(entry >> PART_BITS) as usize] += 1;
+        }
+        let mut next = 0;
+        for start in &mut self.starts[plan.n_dense as usize..] {
+            next += std::mem::replace(start, next);
+        }
+        self.ends.copy_from_slice(&self.starts);
+        for &entry in log {
+            let term = (entry >> PART_BITS) as usize;
+            let doc = (entry & (PART as u32 - 1)) as u16;
+            let end = self.ends[term] as usize;
+            if end == self.starts[term] as usize || self.lists[end - 1] != doc {
+                self.lists[end] = doc;
+                self.ends[term] += 1;
             }
         }
-        self.queue.clear();
+    }
+
+    /// Answers the part: every query that always runs, and those a rare term of this part can
+    /// trigger, marked in a bitset first so that each runs once, in memory order. Then clears
+    /// the part. `part_start` is the shard offset of its first document.
+    fn answer(&mut self, plan: &Compiled, totals: &mut Totals, part_start: u32) {
+        self.index(plan);
+        let n_dense = plan.n_dense as usize;
+        for term in n_dense..plan.n_bool_terms as usize {
+            if self.starts[term] != self.ends[term] {
+                for &query in plan.triggers.get(term as u32) {
+                    self.pending[query as usize / 64] |= 1 << (query % 64);
+                }
+            }
+        }
+        let (dense, lists, starts, ends) = (&self.dense, &self.lists, &self.starts, &self.ends);
+        let postings = |term: u32| {
+            let t = term as usize;
+            if t < n_dense {
+                Postings::Bits(&dense[t])
+            } else {
+                Postings::List(&lists[starts[t] as usize..ends[t] as usize])
+            }
+        };
+        let (result, scratch) = (&mut *self.result, &mut *self.scratch);
+        let mut run = |q: usize| {
+            evaluate(&plan.queries[q], postings, result, scratch);
+            totals.add_bits(q, result, part_start);
+        };
+        (0..plan.n_always).for_each(&mut run);
         for (i, pending) in self.pending.iter_mut().enumerate() {
             let mut queries = std::mem::take(pending);
             while queries != 0 {
-                self.queue.push((i * 64) as u32 + queries.trailing_zeros());
+                run(i * 64 + queries.trailing_zeros() as usize);
                 queries &= queries - 1;
             }
         }
-        // These read scattered memory, so each one's records start loading well before its
-        // turn: what a query holds first, then the entries of the terms it names.
-        for (i, &q) in self.queue.iter().enumerate() {
-            if let Some(&far) = self.queue.get(i + 2 * AHEAD) {
-                prefetch(&plan.queries[far as usize]);
-                totals.prefetch(far as usize);
-            }
-            if let Some(&near) = self.queue.get(i + AHEAD) {
-                let query = &plan.queries[near as usize];
-                for &term in &query.terms[..query.len as usize] {
-                    prefetch(&self.slots[term as usize]);
-                }
-            }
-            let result = evaluate(&plan.queries[q as usize], &self.words, &self.slots);
-            if result != [0; 4] {
-                totals.add_block(q as usize, &result, start);
-            }
-        }
-        let first_rare = self.absent as usize + 1;
-        self.words[..plan.n_dense as usize].fill([0; 4]);
-        self.words[first_rare..first_rare + self.n_rare].fill([0; 4]);
-        for &term in &self.rare[..self.n_rare] {
-            self.slots[term as usize] = self.absent;
-        }
-        self.n_rare = 0;
+        self.dense.iter_mut().for_each(|bits| bits.fill(0));
+        self.n_log = 0;
     }
 }
 
@@ -149,78 +202,6 @@ fn hash_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &mut [(
         let key = Key::at(shard, start as usize, (end - start) as usize);
         *entry = (plan.table.prefetch(key), key);
     }
-}
-
-/// Turns tokens into term ids and sets each term's bit for document `doc`. A dense term needs
-/// one write. Rare terms have a place only while they are in the block, and those places are
-/// scattered, so they wait in `waiting` until the whole document can be handled in one batch.
-#[inline(never)]
-#[allow(clippy::too_many_arguments)]
-fn set_words(
-    plan: &Compiled,
-    shard: &[u8],
-    tokens: &[[u32; 2]],
-    keys: &[(usize, Key)],
-    ids: &mut [u32],
-    waiting: &mut [u32],
-    block: &mut Block,
-    anchored: &mut Vec<usize>,
-    doc: u16,
-) {
-    let (part, bit) = (doc as usize / 64 % 4, 1u64 << (doc % 64));
-    let (table, n_dense, n_bool_terms) = (&plan.table, plan.n_dense, plan.n_bool_terms);
-    let (absent, mut n_rare) = (block.absent, block.n_rare);
-    let (words, slots, rare) = (
-        &mut block.words[..],
-        &mut block.slots[..],
-        &mut block.rare[..],
-    );
-    let first_rare = absent + 1;
-    let mut n_waiting = 0;
-    for (position, ((id, &[start, end]), &(home, key))) in
-        ids.iter_mut().zip(tokens).zip(keys).enumerate()
-    {
-        let found = table.lookup(home, key, shard, start as usize, end as usize);
-        let term = found.id();
-        *id = term;
-        // SAFETY: `words` has an entry for `n_dense`, which nothing reads, and `waiting` has
-        // room for every token of the document.
-        unsafe {
-            *words
-                .get_unchecked_mut(term.min(n_dense) as usize)
-                .get_unchecked_mut(part) |= bit;
-            *waiting.get_unchecked_mut(n_waiting) = term;
-        }
-        n_waiting += (term >= n_dense && term < n_bool_terms) as usize;
-        if found.is_anchor() {
-            anchored.push(position);
-        }
-    }
-    let waiting = &waiting[..n_waiting];
-    for (i, &term) in waiting.iter().enumerate() {
-        if let Some(&next) = waiting.get(i + AHEAD) {
-            prefetch(&slots[next as usize]);
-        }
-        // SAFETY: a waiting term is below `n_bool_terms`, which `slots` covers. A slot is below
-        // `first_rare + n_rare`, and `n_rare` is below the size of `rare` because each rare
-        // term enters once, so all of these stay inside `words` and `rare`.
-        unsafe {
-            let entry = slots.get_unchecked_mut(term as usize);
-            let is_new = *entry == absent;
-            let slot = if is_new {
-                first_rare + n_rare as u32
-            } else {
-                *entry
-            };
-            *entry = slot;
-            *rare.get_unchecked_mut(n_rare) = term;
-            n_rare += is_new as usize;
-            *words
-                .get_unchecked_mut(slot as usize)
-                .get_unchecked_mut(part) |= bit;
-        }
-    }
-    block.n_rare = n_rare;
 }
 
 /// Checks the phrases anchored at position `at` of a document's token ids. The ids are those
@@ -247,9 +228,8 @@ fn check_phrases(plan: &Compiled, ids: &[u32], at: usize, doc: u16, totals: &mut
 pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
     let (base, _) = parse_id(shard, 0);
     let mut totals = Totals::new(base, plan.queries.len());
-    let mut block = Block::new(plan);
+    let mut part = Part::new(plan, shard.len());
     let (mut edges, mut ids, mut anchored, mut keys) = (vec![], vec![], vec![], vec![]);
-    let mut waiting = vec![];
     let (mut at, mut doc) = (0, 0u16);
     while at < shard.len() {
         assert!(doc != crate::eval::NEVER, "too many documents in one shard");
@@ -261,34 +241,23 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         // These only ever grow, so that a document pays for no clearing.
         if ids.len() < tokens.len() {
             ids.resize(tokens.len(), 0);
-            waiting.resize(tokens.len(), 0);
             keys.resize(tokens.len(), (0, Key::default()));
         }
         anchored.clear();
         hash_tokens(plan, shard, tokens, &mut keys);
-        let (ids, waiting) = (&mut ids, &mut waiting);
-        set_words(
-            plan,
-            shard,
-            tokens,
-            &keys,
-            ids,
-            waiting,
-            &mut block,
-            &mut anchored,
-            doc,
-        );
+        let offset = doc as usize % PART;
+        part.add_tokens(plan, shard, tokens, &keys, &mut ids, &mut anchored, offset);
         for &position in &anchored {
             check_phrases(plan, &ids[..tokens.len()], position, doc, &mut totals);
         }
 
-        if doc as usize % BLOCK == BLOCK - 1 {
-            block.flush(plan, &mut totals, doc as u32 / BLOCK as u32);
+        if offset == PART - 1 {
+            part.answer(plan, &mut totals, doc as u32 + 1 - PART as u32);
         }
         doc = doc.wrapping_add(1);
     }
-    if !(doc as usize).is_multiple_of(BLOCK) {
-        block.flush(plan, &mut totals, doc as u32 / BLOCK as u32);
+    if !(doc as usize).is_multiple_of(PART) {
+        part.answer(plan, &mut totals, doc as u32 / PART as u32 * PART as u32);
     }
     totals
 }

@@ -1,6 +1,6 @@
 //! Bit-parallel BOOL evaluation and the per-shard running totals.
 
-use crate::queries::{Form, Op, Query};
+use crate::queries::{Op, Query};
 
 /// How many of the smallest matching ids each query reports.
 pub const MAX_IDS: usize = 10;
@@ -8,56 +8,64 @@ pub const MAX_IDS: usize = 10;
 /// `last` starts here, which no block or document number reaches (see `scan::scan_shard`).
 pub const NEVER: u16 = u16::MAX;
 
-/// Starts loading the cache line that holds `value`.
+/// How many documents a part holds, as a power of two.
+pub const PART_BITS: u32 = 12;
+pub const PART: usize = 1 << PART_BITS;
+
+/// One bit for each document of a part.
+pub type Bits = [u64; PART / 64];
+
+/// 256 bits, the unit `tally` counts in.
+type Chunk = [u64; 4];
+
+/// What a part knows about a term: a bit per document, or a rare term's sorted document offsets.
+pub enum Postings<'a> {
+    Bits(&'a Bits),
+    List(&'a [u16]),
+}
+
 #[inline]
-pub fn prefetch<T>(value: &T) {
-    #[cfg(target_arch = "x86_64")]
-    // SAFETY: prefetching has no effect other than on the cache.
-    unsafe {
-        use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
-        _mm_prefetch::<_MM_HINT_T0>(std::ptr::from_ref(value).cast());
+fn set(bits: &mut Bits, doc: u16) {
+    bits[doc as usize / 64] |= 1 << (doc % 64);
+}
+
+/// Applies one step of a query to the running result `r`. `scratch` is all zero on entry and
+/// exit. It lets `AND` with a list stay as cheap as the list is short.
+#[inline]
+fn apply(r: &mut Bits, scratch: &mut Bits, term: Postings, op: Op) {
+    match (term, op) {
+        (Postings::Bits(w), Op::And) => r.iter_mut().zip(w).for_each(|(r, w)| *r &= w),
+        (Postings::Bits(w), Op::Or) => r.iter_mut().zip(w).for_each(|(r, w)| *r |= w),
+        (Postings::Bits(w), Op::Not) => r.iter_mut().zip(w).for_each(|(r, w)| *r &= !w),
+        (Postings::List(list), Op::Or) => list.iter().for_each(|&doc| set(r, doc)),
+        (Postings::List(list), Op::Not) => {
+            for &doc in list {
+                r[doc as usize / 64] &= !(1 << (doc % 64));
+            }
+        }
+        (Postings::List(list), Op::And) => {
+            list.iter().for_each(|&doc| set(scratch, doc));
+            r.iter_mut().zip(scratch.iter()).for_each(|(r, w)| *r &= w);
+            list.iter().for_each(|&doc| scratch[doc as usize / 64] = 0);
+        }
     }
-    #[cfg(not(target_arch = "x86_64"))]
-    let _ = value;
 }
 
-/// One bit for each document of a block.
-pub type Word = [u64; 4];
-
-/// How many documents a block holds.
-pub const BLOCK: usize = 256;
-
-#[inline]
-fn combine(r: Word, w: Word, op: Op) -> Word {
-    std::array::from_fn(|i| match op {
-        Op::And => r[i] & w[i],
-        Op::Or => r[i] | w[i],
-        Op::Not => r[i] & !w[i],
-    })
-}
-
-/// Evaluates a BOOL query on a block, strictly left to right as the spec defines it. Each bit
-/// stands for one document, so `&`, `|` and `& !` are the spec's three set operations. There is
+/// Evaluates a BOOL query on a part, strictly left to right as the spec defines it. Each bit
+/// stands for one document, so the three steps are the spec's three set operations. There is
 /// no "all documents" set, so `r` can only ever hold documents that contain a query term.
-/// `slots[t]` says which entry of `words` holds term `t`.
 #[inline]
-pub fn evaluate(query: &Query, words: &[Word], slots: &[u32]) -> Word {
-    let mut r = words[slots[query.terms[0] as usize] as usize];
+pub fn evaluate<'a>(
+    query: &Query,
+    postings: impl Fn(u32) -> Postings<'a>,
+    r: &mut Bits,
+    scratch: &mut Bits,
+) {
+    r.fill(0);
+    apply(r, scratch, postings(query.terms[0]), Op::Or);
     for i in 1..query.len as usize {
-        let w = words[slots[query.terms[i] as usize] as usize];
-        r = combine(r, w, query.ops[i - 1]);
+        apply(r, scratch, postings(query.terms[i]), query.ops[i - 1]);
     }
-    r
-}
-
-/// Evaluates a query's folded form, whose terms are all dense, so they index `words` directly.
-#[inline]
-pub fn evaluate_form(form: &Form, words: &[Word]) -> Word {
-    let mut r = words[form.terms[0] as usize];
-    for i in 1..form.len as usize {
-        r = combine(r, words[form.terms[i] as usize], form.ops[i - 1]);
-    }
-    r
 }
 
 /// The sum of the positions of the set bits. Each mask picks the positions with one binary
@@ -83,7 +91,7 @@ fn sum_of_bit_positions(word: u64) -> u32 {
 /// How many bits are set, and the sum of their positions.
 #[cfg(not(target_feature = "avx2"))]
 #[inline]
-fn tally(word: &Word) -> (u32, u32) {
+fn tally(word: &Chunk) -> (u32, u32) {
     let (mut count, mut sum) = (0, 0);
     for (i, &part) in word.iter().enumerate() {
         count += part.count_ones();
@@ -96,7 +104,7 @@ fn tally(word: &Word) -> (u32, u32) {
 /// each byte.
 #[cfg(target_feature = "avx2")]
 #[inline]
-fn tally(word: &Word) -> (u32, u32) {
+fn tally(word: &Chunk) -> (u32, u32) {
     use std::arch::x86_64::*;
     // SAFETY: the cfg above means this build only runs on CPUs with AVX2, and the load is an
     // unaligned read of the 32 bytes of `word`.
@@ -173,33 +181,31 @@ impl Totals {
         }
     }
 
-    /// Starts loading what recording a match of `query` will touch.
+    /// Records the matches in `bits` for the part starting at document `part_start`.
     #[inline]
-    pub fn prefetch(&self, query: usize) {
-        prefetch(&self.count[query]);
-        prefetch(&self.sum[query]);
-    }
-
-    /// Records the matches in `word` for the block starting at document `block_start`.
-    #[inline]
-    pub fn add_block(&mut self, query: usize, word: &Word, block_start: u32) {
-        let (matches, positions) = tally(word);
+    pub fn add_bits(&mut self, query: usize, bits: &Bits, part_start: u32) {
+        let (mut matches, mut positions) = (0, 0);
+        for (i, chunk) in bits.as_chunks::<4>().0.iter().enumerate() {
+            let (count, sum) = tally(chunk);
+            matches += count;
+            positions += sum + count * 256 * i as u32;
+        }
         let seen = self.count[query] as usize;
-        if seen < MAX_IDS {
-            self.add_first(query, seen, word, block_start);
+        if matches > 0 && seen < MAX_IDS {
+            self.add_first(query, seen, bits, part_start);
         }
         self.count[query] += matches as u16;
-        self.sum[query] += matches * block_start + positions;
+        self.sum[query] += matches * part_start + positions;
     }
 
     /// Fills a query's list of smallest ids.
-    fn add_first(&mut self, query: usize, seen: usize, word: &Word, block_start: u32) {
+    fn add_first(&mut self, query: usize, seen: usize, bits: &Bits, part_start: u32) {
         let mut slots = self.first[query][seen..].iter_mut();
-        for (i, &part) in word.iter().enumerate() {
-            let mut rest = part;
+        for (i, &word) in bits.iter().enumerate() {
+            let mut rest = word;
             while rest != 0 {
                 let Some(slot) = slots.next() else { return };
-                *slot = (block_start + i as u32 * 64 + rest.trailing_zeros()) as u16;
+                *slot = (part_start + i as u32 * 64 + rest.trailing_zeros()) as u16;
                 rest &= rest - 1;
             }
         }

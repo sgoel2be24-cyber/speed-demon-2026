@@ -7,10 +7,10 @@ use std::cmp::Reverse;
 /// The spec's limit: a phrase has up to 8 terms, a BOOL query up to 6.
 pub const MAX_TERMS: usize = 8;
 
-/// A BOOL term used at least this often in `queries.txt` is dense: it gets a place in a small
-/// array that stays in cache. How often a term appears in the file is a good, free guide to
-/// how common it is in the corpus, and this affects speed only, never an answer.
-const DENSE_USES: u64 = 4;
+/// This many of the most used BOOL terms are dense: each part keeps a bit for each document
+/// instead of a list. How often a term appears in `queries.txt` is a good, free guide to how
+/// common it is in the corpus, and this affects speed only, never an answer.
+const MAX_DENSE: u32 = 1024;
 
 #[derive(Clone, Copy, Default)]
 pub enum Op {
@@ -28,14 +28,6 @@ pub struct Query {
     pub ops: [Op; 6],
     pub len: u8,
     pub is_phrase: bool,
-}
-
-/// What a BOOL query becomes in a block that holds none of its rare terms: its dense terms only.
-#[derive(Clone, Copy, Default)]
-pub struct Form {
-    pub terms: [u16; 6],
-    pub ops: [Op; 5],
-    pub len: u8,
 }
 
 /// A compact map from term id to a list of items.
@@ -74,19 +66,19 @@ impl<T: Copy> TermLists<T> {
 /// Everything the scan needs to know about the queries.
 pub struct Compiled<'a> {
     pub table: TermTable<'a>,
-    /// The queries: those with a folded form first, the other BOOL queries from the most often
-    /// evaluated to the least, then the phrases.
+    /// The queries: first those that run on every part, then the other BOOL queries from the
+    /// most often evaluated to the least, then the phrases.
     pub queries: Vec<Query>,
     pub n_bool: usize,
-    /// The folded forms of the first `forms.len()` queries, which run in every block.
-    pub forms: Vec<Form>,
+    /// How many of the first queries run on every part.
+    pub n_always: usize,
     /// How many terms appear in a BOOL query. These have the lowest ids.
     pub n_bool_terms: u32,
     /// How many terms are dense. These have the lowest ids of all.
     pub n_dense: u32,
     /// For each line of `queries.txt`, its position in `queries`.
     pub position_of_line: Vec<u32>,
-    /// For each rare term, the BOOL queries to evaluate in full in a block where it occurs.
+    /// For each rare term, the BOOL queries to evaluate on a part where it occurs.
     pub triggers: TermLists<u32>,
     /// For each term, the phrases to check at each of its occurrences, as the query and the
     /// position of the term within the phrase.
@@ -151,32 +143,6 @@ fn push_cover(query: &Query, index: u32, freq: &[u64], pairs: &mut Vec<(u32, u32
     }
 }
 
-/// The query with every rare term taken as absent, which is its exact meaning in any block
-/// that holds none of them. An empty form means every match contains a rare term.
-fn fold(query: &Query, n_dense: u32) -> Form {
-    let mut form = Form::default();
-    for i in 0..query.len as usize {
-        let term = query.terms[i];
-        let op = if i == 0 { Op::Or } else { query.ops[i - 1] };
-        let len = form.len as usize;
-        match (term < n_dense, op) {
-            (false, Op::And) => form.len = 0,
-            (false, _) => {}
-            (true, Op::Or) if len == 0 => {
-                form.terms[0] = term as u16;
-                form.len = 1;
-            }
-            (true, _) if len == 0 => {}
-            (true, _) => {
-                form.terms[len] = term as u16;
-                form.ops[len - 1] = op;
-                form.len += 1;
-            }
-        }
-    }
-    form
-}
-
 /// The phrase term to anchor on. Any term is correct, so this only affects speed. How often
 /// a term appears in `queries.txt` is a good, free guide to how rare it is in the corpus.
 fn pick_anchor(query: &Query, table: &TermTable, freq: &[u64]) -> usize {
@@ -216,10 +182,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
         freq[new] = uses[old as usize];
     }
     table.renumber(&by_use);
-    let n_dense = (0..table.len())
-        .filter(|&t| in_bool[t] && uses[t] >= DENSE_USES)
-        .count()
-        .min(u16::MAX as usize) as u32;
+    let n_dense = n_bool_terms.min(MAX_DENSE);
     for term in queries.iter_mut().flat_map(|query| &mut query.terms) {
         *term = new_id[*term as usize];
     }
@@ -227,7 +190,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     let mut cover_pairs = Vec::new();
     let mut anchor_pairs = Vec::new();
     let mut evaluations = vec![0; queries.len()];
-    let mut is_folded = vec![false; queries.len()];
+    let mut always = vec![false; queries.len()];
     for (line, query) in queries.iter().enumerate() {
         if query.is_phrase {
             let at = pick_anchor(query, &table, &freq);
@@ -238,49 +201,26 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
             push_cover(query, line as u32, &freq, &mut cover_pairs);
             let cover = &cover_pairs[start..];
             evaluations[line] = cover.iter().map(|p| freq[p.0 as usize]).sum::<u64>() + 1;
-            // Only rare terms are watched for. A query with a form runs anyway and needs its
-            // full version wherever one of them occurs. A query with no form can only match
-            // where one of them occurs, so they are a cover too.
-            is_folded[line] = fold(query, n_dense).len > 0;
-            if is_folded[line] || cover.iter().any(|p| p.0 < n_dense) {
+            // A dense term is in nearly every part, so such a query simply always runs.
+            always[line] = cover.iter().any(|p| p.0 < n_dense);
+            if always[line] {
                 cover_pairs.truncate(start);
-                for &term in &query.terms[..query.len as usize] {
-                    if term >= n_dense {
-                        cover_pairs.push((term, line as u32));
-                    }
-                }
             }
         }
     }
 
     let mut lines: Vec<u32> = (0..queries.len() as u32).collect();
-    let order: Vec<(bool, u32, Reverse<u64>)> = queries
-        .iter()
-        .enumerate()
-        .map(|(line, query)| {
-            let shape = if is_folded[line] {
-                let form = fold(query, n_dense);
-                form.ops
-                    .iter()
-                    .fold(form.len as u32, |shape, &op| shape * 3 + op as u32)
-            } else {
-                0
-            };
-            (!is_folded[line], shape, Reverse(evaluations[line]))
-        })
-        .collect();
-    lines.sort_unstable_by_key(|&line| (order[line as usize], line));
+    lines.sort_unstable_by_key(|&line| {
+        let line = line as usize;
+        (!always[line], Reverse(evaluations[line]), line)
+    });
     let mut position_of_line = vec![0; lines.len()];
     for (position, &line) in lines.iter().enumerate() {
         position_of_line[line as usize] = position as u32;
     }
     let n_bool = evaluations.iter().filter(|&&e| e > 0).count();
-    let queries: Vec<Query> = lines.iter().map(|&line| queries[line as usize]).collect();
-    let n_folded = is_folded.iter().filter(|&&folded| folded).count();
-    let forms = queries[..n_folded]
-        .iter()
-        .map(|q| fold(q, n_dense))
-        .collect();
+    let queries = lines.iter().map(|&line| queries[line as usize]).collect();
+    let n_always = always.iter().filter(|&&a| a).count();
     for pair in &mut cover_pairs {
         pair.1 = position_of_line[pair.1 as usize];
     }
@@ -294,7 +234,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
         table,
         queries,
         n_bool,
-        forms,
+        n_always,
         n_bool_terms,
         n_dense,
         position_of_line,
