@@ -181,6 +181,11 @@ impl<'a> TermTable<'a> {
     /// on slots that are not cached, and a document's tokens are known in advance, so those
     /// misses can overlap. Passing the slot to `lookup` saves computing the hash twice.
     #[inline]
+    pub fn home_only(&self, key: Key) -> usize {
+        self.home(key)
+    }
+
+    #[inline]
     pub fn prefetch(&self, key: Key) -> usize {
         let home = self.home(key);
         #[cfg(target_arch = "x86_64")]
