@@ -1,0 +1,47 @@
+name: paired-x86-benchmark
+on:
+  push:
+    paths:
+      - verify/bench.py
+      - verify/candidates.py
+      - .github/workflows/bench.yml
+  workflow_dispatch:
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Record host and install pinned Rust
+        run: |
+          lscpu
+          grep -m1 -o avx2 /proc/cpuinfo
+          rustup toolchain install 1.99.1 --profile minimal --component llvm-tools
+          rustup default 1.99.1
+      - name: Fetch pinned organiser source
+        run: |
+          git clone https://github.com/hackathon-raptors/speed-demon-2026 contest
+          git -C contest checkout 9f059f75384607c7836997063b0901b98f36b5fa
+      - name: Generate held-out benchmark and training data
+        run: |
+          for seed in 2 3; do
+            python contest/generators/b_index.py --seed "$seed" --scale full --out "data/full-seed$seed"
+            python contest/reference/b_index.py --data "data/full-seed$seed" --out "data/full-seed$seed/oracle"
+          done
+          python contest/generators/b_index.py --seed 7 --scale sample --out train-sample
+          python contest/generators/b_index.py --seed 7 --scale full --out train-full
+      - name: Alternate and verify every original candidate
+        run: python verify/bench.py --data data --train-sample train-sample --train-full train-full --reference contest/reference/b_index.py
+      - name: Preserve measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paired-benchmark
+          include-hidden-files: true
+          path: |
+            .out/bench/results.json
+            .out/bench/*-failure/
+          if-no-files-found: warn
