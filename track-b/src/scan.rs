@@ -1,4 +1,5 @@
 //! One pass over a shard of `docs.txt`, answering every query as it goes.
+const STAGE: u32 = 7;
 
 use crate::classify::{CHUNK, classify};
 use crate::eval::{BLOCK, Totals, Word, evaluate, evaluate_form};
@@ -87,24 +88,32 @@ impl Block {
     /// the queries with no form, are marked in a bitset first, so a query runs only once.
     fn flush(&mut self, plan: &Compiled, totals: &mut Totals, block: u32) {
         let start = block * BLOCK as u32;
-        for &term in &self.rare[..self.n_rare] {
-            for &query in plan.triggers.get(term) {
-                self.pending[query as usize / 64] |= 1 << (query % 64);
+        if STAGE >= 5 {
+            for &term in &self.rare[..self.n_rare] {
+                for &query in plan.triggers.get(term) {
+                    self.pending[query as usize / 64] |= 1 << (query % 64);
+                }
             }
         }
+        if STAGE >= 6 {
         for (q, form) in plan.forms.iter().enumerate() {
-            let result = if self.pending[q / 64] >> (q % 64) & 1 == 0 {
+            let result = if STAGE == 6 || self.pending[q / 64] >> (q % 64) & 1 == 0 {
                 evaluate_form(form, &self.words)
             } else {
                 evaluate(&plan.queries[q], &self.words, &self.slots)
             };
             totals.add_block(q, &result, start);
         }
+        }
         let n_forms = plan.forms.len();
         self.pending[..n_forms / 64].fill(0);
         self.pending[n_forms / 64] &= !0 << (n_forms % 64);
         for (i, pending) in self.pending.iter_mut().enumerate() {
             let mut queries = std::mem::take(pending);
+            if STAGE < 7 {
+                std::hint::black_box(queries);
+                continue;
+            }
             while queries != 0 {
                 let q = i * 64 + queries.trailing_zeros() as usize;
                 queries &= queries - 1;
@@ -156,6 +165,11 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         let (_, tab) = parse_id(shard, at);
         let line_end = find_token_edges(shard, tab + 1, &mut edges);
         at = line_end + 1;
+        if STAGE == 1 {
+            std::hint::black_box(edges.len());
+            doc = doc.wrapping_add(1);
+            continue;
+        }
 
         let (part, bit) = (doc as usize / 64 % 4, 1u64 << (doc % 64));
         ids.clear();
@@ -167,12 +181,21 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
             let key = Key::at(shard, start as usize, (end - start) as usize);
             keys.push((plan.table.prefetch(key), key));
         }
+        if STAGE == 2 {
+            std::hint::black_box(keys.len());
+            doc = doc.wrapping_add(1);
+            continue;
+        }
         for (position, ((id, &[start, end]), &(home, key))) in
             ids.iter_mut().zip(tokens).zip(&keys).enumerate()
         {
             let (start, end) = (start as usize, end as usize);
             let found = plan.table.lookup(home, key, &shard[start..end]);
             *id = found.id();
+            if STAGE == 3 {
+                std::hint::black_box(found.id());
+                continue;
+            }
             // Written without branches: whether a token is new to the block is unpredictable.
             let term = found.id().min(plan.n_bool_terms);
             let slot = block.slots[term as usize];
@@ -187,8 +210,14 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
                 anchored.push(position);
             }
         }
-        for &position in &anchored {
-            check_phrases(plan, &ids, position, doc, &mut totals);
+        if STAGE == 3 {
+            doc = doc.wrapping_add(1);
+            continue;
+        }
+        if STAGE >= 5 {
+            for &position in &anchored {
+                check_phrases(plan, &ids, position, doc, &mut totals);
+            }
         }
 
         if doc as usize % BLOCK == BLOCK - 1 {
