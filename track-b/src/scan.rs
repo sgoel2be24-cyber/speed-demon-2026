@@ -191,11 +191,11 @@ fn set_words(
             anchored.push(position);
         }
     }
-    for i in 0..n_waiting {
+    let waiting = &waiting[..n_waiting];
+    for (i, &term) in waiting.iter().enumerate() {
         if let Some(&next) = waiting.get(i + AHEAD) {
             prefetch(&slots[next as usize]);
         }
-        let term = waiting[i];
         // SAFETY: a waiting term is below `n_bool_terms`, which `slots` covers. A slot is below
         // `first_rare + n_rare`, and `n_rare` is below the size of `rare` because each rare
         // term enters once, so all of these stay inside `words` and `rare`.
