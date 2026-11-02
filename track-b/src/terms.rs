@@ -133,7 +133,7 @@ impl<'a> TermTable<'a> {
     }
 
     /// The slot holding this token, or the free slot where it belongs, starting from `home`.
-    #[inline]
+    #[inline(always)]
     fn find(&self, home: usize, key: Key, token: &[u8]) -> usize {
         let mask = self.slots.len() - 1;
         let mut i = home;
