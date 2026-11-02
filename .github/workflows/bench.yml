@@ -36,7 +36,7 @@ jobs:
           python contest/generators/b_index.py --seed 7 --scale sample --out train-sample
           python contest/generators/b_index.py --seed 7 --scale full --out train-full
       - name: Alternate and verify every original candidate
-        run: python verify/bench.py --data data --train-sample train-sample --train-full train-full --reference contest/reference/b_index.py --variants baseline,swiss,swiss-staged,phasequery,phasequery-swiss,columns-hash --full-pgo ''
+        run: python verify/bench.py --data data --train-sample train-sample --train-full train-full --reference contest/reference/b_index.py --variants baseline,phasequery,phasequery4,phasequery8,columns-hash-shape --full-pgo ''
       - name: Preserve measurements
         if: always()
         uses: actions/upload-artifact@v4

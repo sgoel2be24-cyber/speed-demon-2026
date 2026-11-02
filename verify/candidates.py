@@ -6,7 +6,7 @@ def apply(folder, variant):
     folder = Path(folder)
     scan = (folder / "src/scan.rs").read_text()
     evaluation = (folder / "src/eval.rs").read_text()
-    if variant in {"shape", "staged-shape"}:
+    if variant in {"shape", "staged-shape", "columns-hash-shape"}:
         queries = folder / "src/queries.rs"
         source = queries.read_text()
         source = source.replace("Vec<(bool, u32, Reverse<u64>)>", "Vec<(u8, u32, Reverse<u64>)>")
@@ -59,7 +59,7 @@ fn lookup_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &[(us
             ids,""", """            plan,
             &found[..tokens.len()],
             ids,""")
-    if variant in {"columns", "columns-hash"}:
+    if variant in {"columns", "columns-hash", "columns-hash-shape"}:
         evaluation = evaluation.replace("pub first: Vec<[u16; MAX_IDS]>", "pub first: Vec<u16>")
         evaluation = evaluation.replace("first: vec![[0; MAX_IDS]; n_queries]", "first: vec![0; MAX_IDS * n_queries]")
         evaluation = evaluation.replace("let mut slots = self.first[query][seen..].iter_mut();", "let mut seen = seen;")
@@ -71,20 +71,20 @@ fn lookup_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &[(us
         output = folder / "src/output.rs"
         output.write_text(output.read_text().replace("for &doc in &shard.first[q][..take] {",
             "for rank in 0..take {\n                let doc = shard.first[rank * shard.count.len() + q];"))
-    if variant in {"hash64", "columns-hash"}:
+    if variant in {"hash64", "columns-hash", "columns-hash-shape"}:
         terms = folder / "src/terms.rs"
         terms.write_text(terms.read_text().replace(
             "self.0[0].wrapping_mul(A) ^ self.0[1].wrapping_mul(B)", "self.0[0].wrapping_mul(A)"))
-    if variant in {"phase", "phase4", "phase32", "phasefast", "phasequery", "phasequery-swiss"}:
+    if variant in {"phase", "phase4", "phase32", "phasefast", "phasequery", "phasequery4", "phasequery8", "phasequery-swiss"}:
         main = (folder / "src/main.rs").read_text()
         begin = main.index("    let totals: Vec<_> = thread::scope")
         main = main[:begin] + '    fs::write(out.join("results.txt"), phase::run(&plan, docs, threads))\n}\n'
         main = main.replace("mod classify;", "mod phase;\nmod classify;")
         (folder / "src/main.rs").write_text(main)
         phase_source = Path(__file__).with_name("phase.rs").read_text()
-        size = {"phase": 16384, "phase4": 4096, "phase32": 32768, "phasefast": 16384, "phasequery": 16384, "phasequery-swiss": 16384}[variant]
+        size = {"phase": 16384, "phase4": 4096, "phase32": 32768, "phasefast": 16384, "phasequery": 16384, "phasequery4": 4096, "phasequery8": 8192, "phasequery-swiss": 16384}[variant]
         phase_source = phase_source.replace("const PHASE: usize = 16384;", f"const PHASE: usize = {size};")
-        if variant in {"phasefast", "phasequery", "phasequery-swiss"}:
+        if variant in {"phasefast", "phasequery", "phasequery4", "phasequery8", "phasequery-swiss"}:
             phase_source = phase_source.replace(
                 "    for phase in (0..documents).step_by(PHASE) {",
                 """    let dense_storage = crate::huge_slice(plan.n_dense as usize * (PHASE / 64), 0u64);
@@ -109,7 +109,7 @@ fn lookup_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &[(us
             stats = stats.replace("first.push(base + i as u32 * 256 + j as u32 * 64 + rest.trailing_zeros());",
                                   "first[seen] = base + i as u32 * 256 + j as u32 * 64 + rest.trailing_zeros();\n                    seen += 1;")
             phase_source = phase_source[:begin] + stats + phase_source[end:]
-        if variant in {"phasequery", "phasequery-swiss"}:
+        if variant in {"phasequery", "phasequery4", "phasequery8", "phasequery-swiss"}:
             old = """        let present = term_present(query.terms[i], doc, plan, dense, stride, offsets, postings);
         result = match query.ops[i - 1] {
             Op::And => result && present,
@@ -209,7 +209,7 @@ fn lookup_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &[(us
         source = terms.read_text().split("/// Open-addressing hash table")[0]
         source = source.replace("#[derive(Clone, Copy, Default, PartialEq)]", "#[derive(Clone, Copy, Default, PartialEq, Eq)]")
         terms.write_text(source + Path(__file__).with_name("swiss.rs").read_text())
-    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined", "phase", "phase4", "phase32", "phasefast", "columns", "hash64", "columns-hash", "staged", "shape", "staged-shape", "swiss", "swiss-staged", "phasequery", "phasequery-swiss"}:
+    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined", "phase", "phase4", "phase32", "phasefast", "columns", "hash64", "columns-hash", "columns-hash-shape", "staged", "shape", "staged-shape", "swiss", "swiss-staged", "phasequery", "phasequery4", "phasequery8", "phasequery-swiss"}:
         raise ValueError(variant)
     (folder / "src/scan.rs").write_text(scan)
     (folder / "src/eval.rs").write_text(evaluation)

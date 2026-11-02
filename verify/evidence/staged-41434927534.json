@@ -1,0 +1,67 @@
+{
+  "run_id": 41434927534,
+  "source": "https://github.com/sgoel2be24-cyber/speed-demon-2026/actions/runs/41434927534",
+  "scope": "9 measured rounds on each held-out full seed; runner medians, not scoring-box times",
+  "all_candidate_hashes_fuzz_and_regressions_passed": true,
+  "summary": {
+    "baseline/12": {
+      "median_seconds": {
+        "2": 0.6516893589999881,
+        "3": 0.6509491310000612
+      },
+      "mean_ratio_to_baseline": 1
+    },
+    "staged/12": {
+      "median_seconds": {
+        "2": 0.6439840960000538,
+        "3": 0.6473907820000022
+      },
+      "mean_ratio_to_baseline": 0.9913550388482754
+    },
+    "shape/12": {
+      "median_seconds": {
+        "2": 0.6308478209999748,
+        "3": 0.6382690869999124
+      },
+      "mean_ratio_to_baseline": 0.974269948808933
+    },
+    "staged-shape/12": {
+      "median_seconds": {
+        "2": 0.6412115119999271,
+        "3": 0.6362212200000386
+      },
+      "mean_ratio_to_baseline": 0.9806483675674618
+    },
+    "columns/12": {
+      "median_seconds": {
+        "2": 0.6430111820000093,
+        "3": 0.647255585000039
+      },
+      "mean_ratio_to_baseline": 0.9905047374552733
+    },
+    "baseline/6": {
+      "median_seconds": {
+        "2": 0.6187342020000415,
+        "3": 0.6171650400000317
+      },
+      "mean_ratio_to_baseline": 0.9487657234855127
+    },
+    "baseline/24": {
+      "median_seconds": {
+        "2": 0.723235599000077,
+        "3": 0.7297153939999816
+      },
+      "mean_ratio_to_baseline": 1.115393991112147
+    }
+  },
+  "memory_samples_from_log": [
+    "2026-11-02T11:21:42.8608912Z baseline/12 {'sampled_peak_RssAnon_MiB': 35.7578125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:21:43.5342520Z staged/12 {'sampled_peak_RssAnon_MiB': 35.7109375, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:21:44.2065583Z shape/12 {'sampled_peak_RssAnon_MiB': 35.65625, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:21:44.8625118Z staged-shape/12 {'sampled_peak_RssAnon_MiB': 35.51953125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:21:45.5364980Z columns/12 {'sampled_peak_RssAnon_MiB': 33.359375, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:21:46.1817608Z baseline/6 {'sampled_peak_RssAnon_MiB': 24.06640625, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T11:21:46.9175552Z baseline/24 {'sampled_peak_RssAnon_MiB': 58.375, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}"
+  ]
+}
+

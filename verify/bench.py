@@ -74,6 +74,8 @@ def main():
     candidates += [(name, threads) for name in ["baseline", "combined", "phase"] if name in binaries for threads in [6, 24]]
     if "columns-hash" in binaries:
         candidates.append(("columns-hash", 6))
+    if "columns-hash-shape" in binaries:
+        candidates.append(("columns-hash-shape", 6))
     measurements = {f"{name}/{threads}": [] for name, threads in candidates}
     output = workspace / "output"
     output.mkdir()
