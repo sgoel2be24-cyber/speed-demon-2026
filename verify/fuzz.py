@@ -27,6 +27,8 @@ ABSENT = ["zurich", "cafe", "273k", "habeascorpus", "andor", "g" * 32, "and0", "
 SEPARATORS = [" ", " ", " ", ", ", ". ", "; ", "-", "/", "'s ", "—", " — ", " ", "’s ", " (",
               ") ", "ü", "K", "İ", "\U0001d504", "ﬁ", "...", " & "]
 NO_TOKEN = ["", "", "§§ ¶", "* * *", "—", "...", "½"]
+DOC_COUNTS = (1, 2, 3, 31, 32, 33, 63, 64, 65, 127, 128, 129,
+              255, 256, 257, 511, 512, 513, 767, 768, 769, 1023, 1024, 1025)
 
 
 def styled(rng, word):
@@ -84,7 +86,8 @@ def query(rng, tokens):
 
 
 def write_case(folder, rng, round_no):
-    n = rng.choice((1, 2, 3, 63, 64, 65, 127, 128, 129, 500))
+    # Cycle rather than sample: every complete cycle must hit each block boundary.
+    n = DOC_COUNTS[round_no % len(DOC_COUNTS)]
     docs = [document(rng) for _ in range(n)]
     tokens = [t for t in token_windows(docs) if t] or [[b"bail"]]
     body = "".join(f"{i}\t{d}\n" for i, d in enumerate(docs)).encode()
@@ -95,15 +98,15 @@ def write_case(folder, rng, round_no):
         body = body[:-1] + pad.rstrip()[:max(missing, 0)] + b"\n"
     with open(os.path.join(folder, "docs.txt"), "wb") as f:
         f.write(body)
-    lines = [query(rng, tokens) for _ in range(rng.choice((1, 5, 40)))]
+    lines = [query(rng, tokens) for _ in range(rng.choice((1, 5, 40, 100, 400)))]
     lines += rng.sample(lines, min(2, len(lines)))
     with open(os.path.join(folder, "queries.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")
 
 
-def solution(folder, threads):
+def solution(folder, threads, binary, timeout):
     out = tempfile.mkdtemp(prefix="sd-fuzz-")
-    proc = subprocess.run([BINARY, folder, out, str(threads)], capture_output=True)
+    proc = subprocess.run([binary, folder, out, str(threads)], capture_output=True, timeout=timeout)
     data = None
     if proc.returncode == 0:
         with open(os.path.join(out, "results.txt"), "rb") as f:
@@ -118,6 +121,8 @@ def main():
     ap.add_argument("--rounds", type=int, default=200)
     ap.add_argument("--seed", type=int, default=2026)
     ap.add_argument("--threads", default="1,3,12")
+    ap.add_argument("--binary", default=BINARY)
+    ap.add_argument("--timeout", type=float, default=30)
     ap.add_argument("--keep", help="copy the first failing case to this folder")
     args = ap.parse_args()
     rng = random.Random(args.seed)
@@ -128,7 +133,7 @@ def main():
         with open(folder + "/oracle/results.txt", "rb") as f:
             want = f.read()
         for threads in (int(t) for t in args.threads.split(",")):
-            got, err = solution(folder, threads)
+            got, err = solution(folder, threads, args.binary, args.timeout)
             if got != want:
                 print(f"FAIL  round {round_no} threads {threads}\n{err}")
                 if args.keep:
@@ -136,7 +141,8 @@ def main():
                 shutil.rmtree(folder)
                 sys.exit(1)
     shutil.rmtree(folder)
-    print(f"PASS  {args.rounds} rounds")
+    print(f"PASS  {args.rounds} rounds, seed {args.seed}, threads {args.threads}; "
+          f"{min(args.rounds, len(DOC_COUNTS))} document counts from {DOC_COUNTS}")
 
 
 if __name__ == "__main__":

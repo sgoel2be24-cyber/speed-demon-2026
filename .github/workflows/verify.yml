@@ -27,8 +27,19 @@ jobs:
           rustup toolchain install 1.99.1 --profile minimal
           rustup default 1.99.1
 
-      - name: Build
-        run: cargo build --release --manifest-path track-b/Cargo.toml
+      - name: Build the same AVX2 paths as the Dockerfile
+        working-directory: track-b
+        run: |
+          cargo rustc --release --verbose -- --print cfg | tee build-cfg.txt
+          grep -qx 'target_feature="avx2"' build-cfg.txt
+          cargo build --release --verbose
+
+      - name: Check tally and query invariants against scalar oracles
+        working-directory: verify/kernel_test
+        env:
+          RUSTFLAGS: -C target-cpu=x86-64-v3
+          VERIFY_REQUIRE_AVX2: "1"
+        run: cargo test --release -- --nocapture
 
       - name: Prove the AVX2 classifier correct for every byte
         working-directory: verify/classify_test
@@ -39,7 +50,10 @@ jobs:
           grep -q "AVX2 build: true" result.txt
 
       - name: Fetch the generators and the reference
-        run: git clone --depth 1 https://github.com/hackathon-raptors/speed-demon-2026 contest
+        run: |
+          git clone https://github.com/hackathon-raptors/speed-demon-2026 contest
+          git -C contest checkout 9f059f75384607c7836997063b0901b98f36b5fa
+          cmp track-b/generator/b_index.py contest/generators/b_index.py
 
       - name: Generate data and reference answers
         run: bash verify/generate.sh contest data python
@@ -48,4 +62,17 @@ jobs:
         run: python verify/levels.py --data data --levels 0,1,2,3,4,5,7
 
       - name: Fuzz
-        run: python verify/fuzz.py --reference contest/reference/b_index.py --rounds 300
+        run: python verify/fuzz.py --reference contest/reference/b_index.py --rounds 300 --seed 4242 --keep .out/fuzz-failure
+
+      - name: Build and verify the actual PGO Docker image on holdout seeds
+        run: python verify/docker.py --data data
+
+      - name: Keep verification evidence and failing cases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-evidence
+          path: |
+            track-b/build-cfg.txt
+            .out/
+          if-no-files-found: warn
