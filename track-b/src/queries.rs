@@ -10,7 +10,7 @@ pub const MAX_TERMS: usize = 8;
 /// This many of the most used BOOL terms are dense: each part keeps a bit for each document
 /// instead of a list. How often a term appears in `queries.txt` is a good, free guide to how
 /// common it is in the corpus, and this affects speed only, never an answer.
-const MAX_DENSE: u32 = 1024;
+const MAX_DENSE: u32 = 2048;
 
 #[derive(Clone, Copy, Default)]
 pub enum Op {
