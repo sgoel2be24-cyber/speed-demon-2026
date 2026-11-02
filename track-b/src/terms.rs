@@ -219,17 +219,15 @@ impl<'a> TermTable<'a> {
         Found(self.slots[self.find(home, key, token)])
     }
 
-    /// Replaces every id with `new_id[id]` and refits the slots to the real number of terms.
-    /// Terms go back in id order, so the busiest ones get the shortest probes.
-    pub fn renumber(&mut self, new_id: &[u32]) {
+    /// Gives each term a new id, its place in `order`, and refits the slots to the real number
+    /// of terms. Terms go back in id order, so the busiest ones get the shortest probes.
+    pub fn renumber(&mut self, order: &[u32]) {
         let old_terms = std::mem::take(&mut self.terms);
-        let mut order: Vec<usize> = (0..old_terms.len()).collect();
-        order.sort_by_key(|&old| new_id[old]);
         self.keys.clear();
         self.empty = (old_terms.len() as u32) << 1;
         self.reset_slots(old_terms.len() * 12);
-        for old in order {
-            self.intern(old_terms[old]);
+        for &old in order {
+            self.intern(old_terms[old as usize]);
         }
         self.keys.push(Key::default());
     }

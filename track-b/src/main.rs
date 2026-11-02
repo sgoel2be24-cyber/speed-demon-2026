@@ -95,9 +95,16 @@ fn main() -> io::Result<()> {
     let totals: Vec<_> = done.into_iter().map(|d| d.into_inner().unwrap().unwrap()).collect();
 
     let t2 = t0.elapsed();
-    let results = output::format_results(&totals, &plan.position_of_line);
+    let lines = plan.position_of_line.chunks(plan.position_of_line.len().div_ceil(cores.max(1)).max(1));
+    let parts: Vec<Vec<u8>> = thread::scope(|scope| {
+        let totals = &totals;
+        let workers: Vec<_> = lines
+            .map(|part| scope.spawn(move || output::format_results(totals, part)))
+            .collect();
+        workers.into_iter().map(|w| w.join().expect("worker")).collect()
+    });
     let t3 = t0.elapsed();
-    let done = fs::write(out.join("results.txt"), results);
+    let done = fs::write(out.join("results.txt"), parts.concat());
     let t4 = t0.elapsed();
     eprintln!("PHASE compile {:?} scan {:?} format {:?} write {:?} total {:?}", t1, t2 - t1, t3 - t2, t4 - t3, t4);
     done

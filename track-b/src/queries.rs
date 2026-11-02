@@ -215,7 +215,7 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
         new_id[old as usize] = new as u32;
         freq[new] = uses[old as usize];
     }
-    table.renumber(&new_id);
+    table.renumber(&by_use);
     let n_dense = (0..table.len())
         .filter(|&t| in_bool[t] && uses[t] >= DENSE_USES)
         .count()
@@ -254,16 +254,20 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     }
 
     let mut lines: Vec<u32> = (0..queries.len() as u32).collect();
-    lines.sort_unstable_by_key(|&line| {
-        let line_at = line as usize;
-        let shape = if is_folded[line_at] {
-            let form = fold(&queries[line_at], n_dense);
-            form.ops.iter().fold(form.len as u32, |shape, &op| shape * 3 + op as u32)
-        } else {
-            0
-        };
-        (!is_folded[line_at], shape, Reverse(evaluations[line_at]), line)
-    });
+    let order: Vec<(bool, u32, Reverse<u64>)> = queries
+        .iter()
+        .enumerate()
+        .map(|(line, query)| {
+            let shape = if is_folded[line] {
+                let form = fold(query, n_dense);
+                form.ops.iter().fold(form.len as u32, |shape, &op| shape * 3 + op as u32)
+            } else {
+                0
+            };
+            (!is_folded[line], shape, Reverse(evaluations[line]))
+        })
+        .collect();
+    lines.sort_unstable_by_key(|&line| (order[line as usize], line));
     let mut position_of_line = vec![0; lines.len()];
     for (position, &line) in lines.iter().enumerate() {
         position_of_line[line as usize] = position as u32;
