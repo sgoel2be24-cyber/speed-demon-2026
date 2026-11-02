@@ -33,14 +33,12 @@ impl Key {
     #[inline]
     pub fn at(bytes: &[u8], start: usize, len: usize) -> Key {
         const LOWERCASE: u64 = 0x2020_2020_2020_2020;
-        let mut window = [0u8; 16];
-        match bytes.get(start..start + 16) {
-            Some(full) => window.copy_from_slice(full),
-            // Too close to the end of the file for a 16-byte read.
-            None => window[..bytes.len() - start].copy_from_slice(&bytes[start..]),
-        }
-        let [low, high] = [&window[..8], &window[8..]]
-            .map(|half| u64::from_le_bytes(half.try_into().expect("8 bytes")) | LOWERCASE);
+        let [low, high] = match bytes.get(start..start + 16) {
+            Some(full) => [&full[..8], &full[8..]]
+                .map(|half| u64::from_le_bytes(half.try_into().expect("8 bytes"))),
+            None => near_end(bytes, start),
+        };
+        let [low, high] = [low | LOWERCASE, high | LOWERCASE];
         let [keep_low, keep_high, mark] = KEEP[len.min(17)];
         Key([low & keep_low, (high & keep_high) | mark])
     }
@@ -56,6 +54,14 @@ impl Key {
         const B: u64 = 0xC2B2_AE3D_27D4_EB4F;
         self.0[0].wrapping_mul(A) ^ self.0[1].wrapping_mul(B)
     }
+}
+
+/// The bytes at `start`, zero-padded, for a token too close to the end for a 16-byte read.
+#[cold]
+fn near_end(bytes: &[u8], start: usize) -> [u64; 2] {
+    let mut window = [0u8; 16];
+    window[..bytes.len() - start].copy_from_slice(&bytes[start..]);
+    [&window[..8], &window[8..]].map(|half| u64::from_le_bytes(half.try_into().expect("8 bytes")))
 }
 
 /// A term id with one more bit, kept together because the scan needs both for every token.
