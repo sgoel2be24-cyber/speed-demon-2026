@@ -185,10 +185,13 @@ impl Totals {
     #[inline]
     pub fn add_bits(&mut self, query: usize, bits: &Bits, part_start: u32) {
         let (mut matches, mut positions) = (0, 0);
+        // Most results are a few documents in a whole part, so empty chunks must cost little.
         for (i, chunk) in bits.as_chunks::<4>().0.iter().enumerate() {
-            let (count, sum) = tally(chunk);
-            matches += count;
-            positions += sum + count * 256 * i as u32;
+            if *chunk != [0; 4] {
+                let (count, sum) = tally(chunk);
+                matches += count;
+                positions += sum + count * 256 * i as u32;
+            }
         }
         let seen = self.count[query] as usize;
         if matches > 0 && seen < MAX_IDS {
