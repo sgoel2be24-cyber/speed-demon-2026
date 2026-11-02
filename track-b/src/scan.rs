@@ -1,5 +1,5 @@
 //! One pass over a shard of `docs.txt`, answering every query as it goes.
-const STAGE: u32 = 3;
+const STAGE: u32 = 2;
 
 use crate::classify::{CHUNK, classify};
 use crate::eval::{BLOCK, Totals, Word, evaluate, evaluate_form};
