@@ -1,4 +1,5 @@
 //! One pass over a shard of `docs.txt`, answering every query as it goes.
+const STAGE: u32 = 7;
 
 use crate::classify::{CHUNK, classify};
 use crate::eval::prefetch;
@@ -96,16 +97,18 @@ impl Block {
     /// the queries with no form, are marked in a bitset first, so a query runs only once.
     fn flush(&mut self, plan: &Compiled, totals: &mut Totals, block: u32) {
         let start = block * BLOCK as u32;
-        for &term in &self.rare[..self.n_rare] {
-            for &query in plan.triggers.get(term) {
-                self.pending[query as usize / 64] |= 1 << (query % 64);
+        if STAGE >= 5 {
+            for &term in &self.rare[..self.n_rare] {
+                for &query in plan.triggers.get(term) {
+                    self.pending[query as usize / 64] |= 1 << (query % 64);
+                }
             }
         }
-        for (q, form) in plan.forms.iter().enumerate() {
+        if STAGE >= 6 { for (q, form) in plan.forms.iter().enumerate() {
             if self.pending[q / 64] >> (q % 64) & 1 == 0 {
                 totals.add_block(q, &evaluate_form(form, &self.words), start);
             }
-        }
+        } }
         self.queue.clear();
         for (i, pending) in self.pending.iter_mut().enumerate() {
             let mut queries = std::mem::take(pending);
@@ -116,7 +119,7 @@ impl Block {
         }
         // These read scattered memory, so each one's records start loading well before its
         // turn: what a query holds first, then the entries of the terms it names.
-        for (i, &q) in self.queue.iter().enumerate() {
+        if STAGE >= 7 { for (i, &q) in self.queue.iter().enumerate() {
             if let Some(&far) = self.queue.get(i + 2 * AHEAD) {
                 prefetch(&plan.queries[far as usize]);
                 totals.prefetch(far as usize);
@@ -131,7 +134,7 @@ impl Block {
             if result != [0; 4] {
                 totals.add_block(q as usize, &result, start);
             }
-        }
+        } }
         let first_rare = self.absent as usize + 1;
         self.words[..plan.n_dense as usize].fill([0; 4]);
         self.words[first_rare..first_rare + self.n_rare].fill([0; 4]);
@@ -245,6 +248,11 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         let (_, tab) = parse_id(shard, at);
         let line_end = find_token_edges(shard, tab + 1, &mut edges);
         at = line_end + 1;
+        if STAGE == 1 {
+            std::hint::black_box(edges.len());
+            doc = doc.wrapping_add(1);
+            continue;
+        }
 
         let tokens = edges.as_chunks::<2>().0;
         // These only ever grow, so that a document pays for no clearing.
@@ -255,11 +263,16 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         }
         anchored.clear();
         hash_tokens(plan, shard, tokens, &mut keys);
+        if STAGE == 2 {
+            std::hint::black_box(&mut keys);
+            doc = doc.wrapping_add(1);
+            continue;
+        }
         let (ids, waiting) = (&mut ids, &mut waiting);
         set_words(plan, shard, tokens, &keys, ids, waiting, &mut block, &mut anchored, doc);
-        for &position in &anchored {
+        if STAGE >= 4 { for &position in &anchored {
             check_phrases(plan, &ids[..tokens.len()], position, doc, &mut totals);
-        }
+        } }
 
         if doc as usize % BLOCK == BLOCK - 1 {
             block.flush(plan, &mut totals, doc as u32 / BLOCK as u32);
