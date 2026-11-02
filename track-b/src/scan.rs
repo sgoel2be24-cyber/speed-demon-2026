@@ -1,6 +1,7 @@
 //! One pass over a shard of `docs.txt`, answering every query as it goes.
 
 use crate::classify::{CHUNK, classify};
+use crate::eval::prefetch;
 use crate::eval::{BLOCK, Totals, Word, evaluate, evaluate_form};
 use crate::queries::Compiled;
 use crate::terms::Key;
@@ -52,6 +53,9 @@ fn parse_id(bytes: &[u8], mut at: usize) -> (u32, usize) {
     (id, at)
 }
 
+/// How many queries ahead a flush starts loading what a query needs.
+const AHEAD: usize = 8;
+
 /// The BOOL terms of the current block. `slots[t]` says which entry of `words` holds term `t`.
 /// A dense term always has entry `t`. A rare term has `absent`, which stays all zero, until it
 /// first occurs in the block and takes the next free entry. Such a term is listed in `rare`,
@@ -64,6 +68,7 @@ struct Block {
     rare: Vec<u32>,
     n_rare: usize,
     pending: Vec<u64>,
+    queue: Vec<u32>,
     absent: u32,
 }
 
@@ -80,6 +85,7 @@ impl Block {
             rare: vec![0; (n_bool_terms - n_dense) as usize + 2],
             n_rare: 0,
             pending: vec![0; plan.n_bool / 64 + 1],
+            queue: vec![],
             absent,
         }
     }
@@ -96,25 +102,34 @@ impl Block {
             }
         }
         for (q, form) in plan.forms.iter().enumerate() {
-            let result = if self.pending[q / 64] >> (q % 64) & 1 == 0 {
-                evaluate_form(form, &self.words)
-            } else {
-                evaluate(&plan.queries[q], &self.words, &self.slots)
-            };
-            totals.add_block(q, &result, start);
+            if self.pending[q / 64] >> (q % 64) & 1 == 0 {
+                totals.add_block(q, &evaluate_form(form, &self.words), start);
+            }
         }
-        let n_forms = plan.forms.len();
-        self.pending[..n_forms / 64].fill(0);
-        self.pending[n_forms / 64] &= !0 << (n_forms % 64);
+        self.queue.clear();
         for (i, pending) in self.pending.iter_mut().enumerate() {
             let mut queries = std::mem::take(pending);
             while queries != 0 {
-                let q = i * 64 + queries.trailing_zeros() as usize;
+                self.queue.push((i * 64) as u32 + queries.trailing_zeros());
                 queries &= queries - 1;
-                let result = evaluate(&plan.queries[q], &self.words, &self.slots);
-                if result != [0; 4] {
-                    totals.add_block(q, &result, start);
+            }
+        }
+        // These read scattered memory, so each one's records start loading well before its
+        // turn: what a query holds first, then the entries of the terms it names.
+        for (i, &q) in self.queue.iter().enumerate() {
+            if let Some(&far) = self.queue.get(i + 2 * AHEAD) {
+                prefetch(&plan.queries[far as usize]);
+                totals.prefetch(far as usize);
+            }
+            if let Some(&near) = self.queue.get(i + AHEAD) {
+                let query = &plan.queries[near as usize];
+                for &term in &query.terms[..query.len as usize] {
+                    prefetch(&self.slots[term as usize]);
                 }
+            }
+            let result = evaluate(&plan.queries[q as usize], &self.words, &self.slots);
+            if result != [0; 4] {
+                totals.add_block(q as usize, &result, start);
             }
         }
         let first_rare = self.absent as usize + 1;

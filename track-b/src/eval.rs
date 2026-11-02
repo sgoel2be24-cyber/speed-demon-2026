@@ -8,6 +8,19 @@ pub const MAX_IDS: usize = 10;
 /// `last` starts here, which no block or document number reaches (see `scan::scan_shard`).
 pub const NEVER: u16 = u16::MAX;
 
+/// Starts loading the cache line that holds `value`.
+#[inline]
+pub fn prefetch<T>(value: &T) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: prefetching has no effect other than on the cache.
+    unsafe {
+        use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+        _mm_prefetch::<_MM_HINT_T0>(std::ptr::from_ref(value).cast());
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = value;
+}
+
 /// One bit for each document of a block.
 pub type Word = [u64; 4];
 
@@ -155,6 +168,13 @@ impl Totals {
             sum: vec![0; n_queries],
             first: vec![[0; MAX_IDS]; n_queries],
         }
+    }
+
+    /// Starts loading what recording a match of `query` will touch.
+    #[inline]
+    pub fn prefetch(&self, query: usize) {
+        prefetch(&self.count[query]);
+        prefetch(&self.sum[query]);
     }
 
     /// Records the matches in `word` for the block starting at document `block_start`.
