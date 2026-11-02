@@ -6,6 +6,21 @@ def apply(folder, variant):
     folder = Path(folder)
     scan = (folder / "src/scan.rs").read_text()
     evaluation = (folder / "src/eval.rs").read_text()
+    if variant in {"phase", "phase4", "phase32"}:
+        main = (folder / "src/main.rs").read_text()
+        begin = main.index("    let totals: Vec<_> = thread::scope")
+        main = main[:begin] + '    fs::write(out.join("results.txt"), phase::run(&plan, docs, threads))\n}\n'
+        main = main.replace("mod classify;", "mod phase;\nmod classify;")
+        (folder / "src/main.rs").write_text(main)
+        phase_source = Path(__file__).with_name("phase.rs").read_text()
+        size = {"phase": 16384, "phase4": 4096, "phase32": 32768}[variant]
+        phase_source = phase_source.replace("const PHASE: usize = 16384;", f"const PHASE: usize = {size};")
+        (folder / "src/phase.rs").write_text(phase_source)
+        scan = scan.replace("fn find_token_edges(", "pub(crate) fn find_token_edges(")
+        scan = scan.replace("fn hash_tokens(", "pub(crate) fn hash_tokens(")
+        evaluation = evaluation.replace("fn tally(", "pub(crate) fn tally(")
+        output = folder / "src/output.rs"
+        output.write_text(output.read_text().replace("fn push_number(", "pub(crate) fn push_number("))
     if variant in {"nonzero", "combined"}:
         old = "totals.add_block(q, &evaluate_form(form, &self.words), start);"
         assert old in scan
@@ -53,7 +68,7 @@ def apply(folder, variant):
         begin = scan.index("/// Finds each token's home")
         end = scan.index("/// Turns tokens into term ids", begin)
         scan = scan[:begin] + scan[end:]
-    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined"}:
+    if variant not in {"baseline", "nonzero", "sparse", "fused", "combined", "phase", "phase4", "phase32"}:
         raise ValueError(variant)
     (folder / "src/scan.rs").write_text(scan)
     (folder / "src/eval.rs").write_text(evaluation)

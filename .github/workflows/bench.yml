@@ -4,6 +4,7 @@ on:
     paths:
       - verify/bench.py
       - verify/candidates.py
+      - verify/phase.rs
       - .github/workflows/bench.yml
   workflow_dispatch:
 jobs:
@@ -34,7 +35,7 @@ jobs:
           python contest/generators/b_index.py --seed 7 --scale sample --out train-sample
           python contest/generators/b_index.py --seed 7 --scale full --out train-full
       - name: Alternate and verify every original candidate
-        run: python verify/bench.py --data data --train-sample train-sample --train-full train-full --reference contest/reference/b_index.py
+        run: python verify/bench.py --data data --train-sample train-sample --train-full train-full --reference contest/reference/b_index.py --variants baseline,phase4,phase,phase32 --full-pgo baseline,phase
       - name: Preserve measurements
         if: always()
         uses: actions/upload-artifact@v4

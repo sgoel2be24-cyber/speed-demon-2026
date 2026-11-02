@@ -56,17 +56,19 @@ def main():
     parser.add_argument("--train-full", required=True, type=pathlib.Path)
     parser.add_argument("--reference", required=True)
     parser.add_argument("--rounds", type=int, default=9)
+    parser.add_argument("--variants", default="baseline,nonzero,sparse,fused,combined")
+    parser.add_argument("--full-pgo", default="baseline,combined")
     args = parser.parse_args()
     workspace = ROOT / ".out/bench"
     shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True)
     binaries = {}
-    for variant in ["baseline", "nonzero", "sparse", "fused", "combined"]:
+    for variant in args.variants.split(","):
         binaries[variant] = build(variant, variant, args.train_sample.resolve(), workspace)
-    for variant in ["baseline", "combined"]:
+    for variant in args.full_pgo.split(","):
         binaries[variant + "-full-pgo"] = build(variant + "-full-pgo", variant, args.train_full.resolve(), workspace)
     candidates = [(name, 12) for name in binaries]
-    candidates += [(name, threads) for name in ["baseline", "combined"] for threads in [6, 24]]
+    candidates += [(name, threads) for name in ["baseline", "combined", "phase"] if name in binaries for threads in [6, 24]]
     measurements = {f"{name}/{threads}": [] for name, threads in candidates}
     output = workspace / "output"
     output.mkdir()
@@ -99,10 +101,28 @@ def main():
             ratios.append(medians[seed] / base)
         summary[label] = {"median_seconds": medians, "mean_ratio_to_baseline": statistics.mean(ratios)}
         print(label, json.dumps(summary[label]), flush=True)
+    memory = {}
+    for label in measurements:
+        name, threads = label.split("/")
+        proc = subprocess.Popen([str(binaries[name]), str(args.data.resolve() / "full-seed2"), str(output), threads])
+        peak = 0
+        while proc.poll() is None:
+            try:
+                for line in pathlib.Path(f"/proc/{proc.pid}/status").read_text().splitlines():
+                    if line.startswith("RssAnon:"):
+                        peak = max(peak, int(line.split()[1]))
+            except FileNotFoundError:
+                pass
+            time.sleep(0.001)
+        assert proc.returncode == 0
+        assert hashlib.sha256((output / "results.txt").read_bytes()).hexdigest() == expected[2]
+        memory[label] = {"sampled_peak_RssAnon_MiB": peak / 1024,
+                         "scope": "1ms /proc sampling, lower bound; not board cgroup M"}
+        print(label, memory[label], flush=True)
     report = {"commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "timing_scope": "x86 runner process wall time, PGO builds; not scoring-box measurements",
               "rounds_per_seed": args.rounds, "expected_sha256": expected,
-              "summary": summary, "measurements": measurements, "all_checks_passed": False}
+              "summary": summary, "measurements": measurements, "memory": memory, "all_checks_passed": False}
     (workspace / "results.json").write_text(json.dumps(report, indent=2) + "\n")
     for name, binary in binaries.items():
         call([sys.executable, str(ROOT / "verify/fuzz.py"), "--reference", args.reference,
