@@ -177,13 +177,18 @@ fn set_words(
         *id = found.id();
         // Written without branches: whether a token is new to the block is unpredictable.
         let term = found.id().min(n_bool_terms);
-        let slot = slots[term as usize];
-        let is_new = slot == absent;
-        let slot = if is_new { first_rare + n_rare as u32 } else { slot };
-        slots[term as usize] = slot;
-        rare[n_rare] = term;
-        n_rare += is_new as usize;
-        words[slot as usize][part] |= bit;
+        // SAFETY: `term` is at most `n_bool_terms`, which `slots` covers. A slot is the term's
+        // own place, or below `first_rare + n_rare`, and `n_rare` is below the size of `rare`
+        // because each rare term enters once, so all of these stay inside `words` and `rare`.
+        unsafe {
+            let entry = slots.get_unchecked_mut(term as usize);
+            let is_new = *entry == absent;
+            let slot = if is_new { first_rare + n_rare as u32 } else { *entry };
+            *entry = slot;
+            *rare.get_unchecked_mut(n_rare) = term;
+            n_rare += is_new as usize;
+            *words.get_unchecked_mut(slot as usize).get_unchecked_mut(part) |= bit;
+        }
         if found.is_anchor() {
             anchored.push(position);
         }
