@@ -41,21 +41,28 @@ fn combine(r: Word, w: Word, op: Op) -> Word {
 /// no "all documents" set, so `r` can only ever hold documents that contain a query term.
 /// `slots[t]` says which entry of `words` holds term `t`.
 #[inline]
-pub fn evaluate(query: &Query, words: &[Word], slots: &[u32]) -> Word {
-    let mut r = words[slots[query.terms[0] as usize] as usize];
+pub fn evaluate(query: &Query, words: &[u64], stride: usize, slots: &[u32]) -> Word {
+    let mut r = read(words, stride, slots[query.terms[0] as usize] as usize);
     for i in 1..query.len as usize {
-        let w = words[slots[query.terms[i] as usize] as usize];
+        let w = read(words, stride, slots[query.terms[i] as usize] as usize);
         r = combine(r, w, query.ops[i - 1]);
     }
     r
 }
 
+/// The four parts of entry `slot`, which `words` keeps in four separate runs.
+#[inline]
+fn read(words: &[u64], stride: usize, slot: usize) -> Word {
+    let parts = &words[slot..slot + 3 * stride + 1];
+    [parts[0], parts[stride], parts[2 * stride], parts[3 * stride]]
+}
+
 /// Evaluates a query's folded form, whose terms are all dense, so they index `words` directly.
 #[inline]
-pub fn evaluate_form(form: &Form, words: &[Word]) -> Word {
-    let mut r = words[form.terms[0] as usize];
+pub fn evaluate_form(form: &Form, words: &[u64], stride: usize) -> Word {
+    let mut r = read(words, stride, form.terms[0] as usize);
     for i in 1..form.len as usize {
-        r = combine(r, words[form.terms[i] as usize], form.ops[i - 1]);
+        r = combine(r, read(words, stride, form.terms[i] as usize), form.ops[i - 1]);
     }
     r
 }

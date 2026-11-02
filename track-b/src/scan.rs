@@ -2,7 +2,7 @@
 
 use crate::classify::{CHUNK, classify};
 use crate::eval::prefetch;
-use crate::eval::{BLOCK, Totals, Word, evaluate, evaluate_form};
+use crate::eval::{BLOCK, Totals, evaluate, evaluate_form};
 use crate::queries::Compiled;
 use crate::terms::Key;
 pub type ShardResult = Totals;
@@ -63,7 +63,8 @@ const AHEAD: usize = 8;
 /// there are rare terms. Misses and terms with no BOOL query all share one entry, which nothing
 /// reads. `pending` is a bitset of BOOL queries, kept here so that a flush needs no allocation.
 struct Block {
-    words: Vec<Word>,
+    words: Vec<u64>,
+    stride: usize,
     slots: Vec<u32>,
     rare: Vec<u32>,
     n_rare: usize,
@@ -80,7 +81,8 @@ impl Block {
         slots.resize(n_bool_terms as usize, absent);
         slots.push(n_dense);
         Block {
-            words: vec![[0; 4]; n_bool_terms as usize + 3],
+            words: vec![0; (n_bool_terms as usize + 3) * 4],
+            stride: n_bool_terms as usize + 3,
             slots,
             rare: vec![0; (n_bool_terms - n_dense) as usize + 2],
             n_rare: 0,
@@ -103,7 +105,7 @@ impl Block {
         }
         for (q, form) in plan.forms.iter().enumerate() {
             if self.pending[q / 64] >> (q % 64) & 1 == 0 {
-                totals.add_block(q, &evaluate_form(form, &self.words), start);
+                totals.add_block(q, &evaluate_form(form, &self.words, self.stride), start);
             }
         }
         self.queue.clear();
@@ -127,14 +129,17 @@ impl Block {
                     prefetch(&self.slots[term as usize]);
                 }
             }
-            let result = evaluate(&plan.queries[q as usize], &self.words, &self.slots);
+            let result = evaluate(&plan.queries[q as usize], &self.words, self.stride, &self.slots);
             if result != [0; 4] {
                 totals.add_block(q as usize, &result, start);
             }
         }
         let first_rare = self.absent as usize + 1;
-        self.words[..plan.n_dense as usize].fill([0; 4]);
-        self.words[first_rare..first_rare + self.n_rare].fill([0; 4]);
+        for part in 0..4 {
+            let at = part * self.stride;
+            self.words[at..at + plan.n_dense as usize].fill(0);
+            self.words[at + first_rare..at + first_rare + self.n_rare].fill(0);
+        }
         for &term in &self.rare[..self.n_rare] {
             self.slots[term as usize] = self.absent;
         }
@@ -169,6 +174,7 @@ fn set_words(
     let (table, n_bool_terms, absent) = (&plan.table, plan.n_bool_terms, block.absent);
     let mut n_rare = block.n_rare;
     let (words, slots, rare) = (&mut block.words[..], &mut block.slots[..], &mut block.rare[..]);
+    let words = &mut words[part * block.stride..(part + 1) * block.stride];
     let first_rare = absent + 1;
     for (position, ((id, &[start, end]), &(home, key))) in
         ids.iter_mut().zip(tokens).zip(keys).enumerate()
@@ -183,7 +189,7 @@ fn set_words(
         slots[term as usize] = slot;
         rare[n_rare] = term;
         n_rare += is_new as usize;
-        words[slot as usize][part] |= bit;
+        words[slot as usize] |= bit;
         if found.is_anchor() {
             anchored.push(position);
         }
