@@ -93,5 +93,32 @@ jobs:
           name: verification-evidence
           path: |
             track-b/build-cfg.txt
-            .out/
+            .out/pgo/
+            .out/*failure/
+          include-hidden-files: true
           if-no-files-found: warn
+
+      - name: Download the evidence to verify retention
+        uses: actions/download-artifact@v4
+        with:
+          name: verification-evidence
+          path: ${{ runner.temp }}/retained-verification
+
+      - name: Check the retained image hashes and outputs
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/retained-verification
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib
+          paths = list(pathlib.Path(os.environ["EVIDENCE_DIR"]).rglob("checks.json"))
+          assert len(paths) == 1, paths
+          metadata = json.loads(paths[0].read_text())
+          assert metadata["architecture"] == "amd64", metadata
+          assert metadata["fuzz"]["passed"] and metadata["regressions"]["passed"], metadata
+          binary = paths[0].parent / "solution"
+          assert hashlib.sha256(binary.read_bytes()).hexdigest() == metadata["binary_sha256"]
+          for case in metadata["full_cases"]:
+              output = paths[0].parent / (case["dataset"] + "-results.txt")
+              assert case["passed"] and hashlib.sha256(output.read_bytes()).hexdigest() == case["sha256"]
+          print("PASS  downloaded PGO evidence: executable, both full outputs, fuzz and regressions")
+          PY

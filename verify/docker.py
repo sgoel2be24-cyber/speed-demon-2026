@@ -45,16 +45,24 @@ def main():
         call("docker", "rm", container)
     binary.chmod(0o755)
     image = json.loads(subprocess.check_output(["docker", "image", "inspect", TAG], text=True))[0]
-    evidence.joinpath("checks.json").write_text(json.dumps({
+    metadata = {
         "image_id": image["Id"], "architecture": image["Architecture"],
+        "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD:track-b/src"], cwd=ROOT, text=True).strip(),
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "full_cases": checks,
-    }, indent=2) + "\n")
+        "fuzz": {"passed": False, "rounds": 300, "seed": 909, "threads": [1, 3, 12]},
+        "regressions": {"passed": False},
+    }
+    evidence.joinpath("checks.json").write_text(json.dumps(metadata, indent=2) + "\n")
     call(sys.executable, "verify/fuzz.py", "--reference", "contest/reference/b_index.py",
          "--binary", str(binary), "--rounds", "300", "--seed", "909",
          "--keep", str(evidence / "fuzz-failure"))
     call(sys.executable, "verify/regressions.py", "--reference", "contest/reference/b_index.py",
          "--binary", str(binary))
+    metadata["fuzz"]["passed"] = True
+    metadata["regressions"]["passed"] = True
+    evidence.joinpath("checks.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print("PASS  PGO image: full seeds 2 and 3, 300 differential fuzz rounds, regressions")
 
 
