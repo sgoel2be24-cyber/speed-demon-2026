@@ -37,6 +37,8 @@ for r in range(13):
         if r == 0:
             hashes.add(hashlib.sha256(open("out/results.txt", "rb").read()).hexdigest())
 print("result hashes", hashes)
+fuzz = subprocess.run(["python", f"wt-{commits[-1][:12]}/verify/fuzz.py", "--reference", "contest/reference/b_index.py", "--rounds", "150"], capture_output=True, text=True)
+print("x86 fuzz:", fuzz.stdout.strip().splitlines()[-1:] , fuzz.stderr.strip().splitlines()[-3:])
 base = None
 for c in commits:
     v = sorted(times[c][1:])
