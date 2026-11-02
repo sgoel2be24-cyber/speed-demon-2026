@@ -4,6 +4,8 @@ The task, the input files and the exact output format are in the [spec](https://
 
 ## Approach
 
+This branch is an experimental hash/layout candidate. Its final clean-build replication did not reproduce the earlier small runner gain. The preferred next board experiment is the separately verified six-worker control `39386e7`; see the [optimisation log](../verify/OPTIMIZATION-82.md). No 82-point or scoring-box improvement is claimed here.
+
 This solution builds no index. The queries are readable from the start, so it reads them first, then answers all of them during one pass over the corpus. The current container candidate explicitly uses six scan workers; the command-line binary also accepts a worker count. Nothing about the corpus is kept beyond the current 256 documents per worker, and the file itself is memory-mapped. The historical board version used twelve workers and peaked below the 44 MB memory-scoring cap; the new candidate's board memory and time are not yet measured.
 
 **BOOL queries** run on blocks of 256 documents. Each thread keeps a 256-bit word per query term, where bit `i` says whether document `i` of the block contains the term. A query is then evaluated on all 256 documents at once: `AND`, `OR` and `NOT` become `&`, `|` and `& !`, applied strictly left to right as the spec defines them.
