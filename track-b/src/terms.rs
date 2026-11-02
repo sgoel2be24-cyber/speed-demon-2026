@@ -200,8 +200,13 @@ impl<'a> TermTable<'a> {
     /// to a key that matches nothing.
     #[inline(always)]
     pub fn lookup(&self, home: usize, key: Key, bytes: &[u8], start: usize, end: usize) -> Found {
-        let slot = self.slots[home];
-        let settled = (self.keys[(slot >> 1) as usize] == key) | (slot == self.empty);
+        // SAFETY: `home` comes from `prefetch`, and every slot holds an id that indexes `keys`,
+        // which has one more entry for the id of a free slot.
+        let (slot, held) = unsafe {
+            let slot = *self.slots.get_unchecked(home);
+            (slot, *self.keys.get_unchecked((slot >> 1) as usize))
+        };
+        let settled = (held == key) | (slot == self.empty);
         if !settled | key.is_long() {
             return self.probe(home, key, &bytes[start..end]);
         }
@@ -222,7 +227,7 @@ impl<'a> TermTable<'a> {
         order.sort_by_key(|&old| new_id[old]);
         self.keys.clear();
         self.empty = (old_terms.len() as u32) << 1;
-        self.reset_slots(old_terms.len() * 3);
+        self.reset_slots(old_terms.len() * 12);
         for old in order {
             self.intern(old_terms[old]);
         }
