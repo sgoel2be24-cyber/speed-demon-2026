@@ -256,7 +256,10 @@ pub fn compile(text: &[u8]) -> Compiled<'_> {
     let mut lines: Vec<u32> = (0..queries.len() as u32).collect();
     lines.sort_unstable_by_key(|&line| {
         let line_at = line as usize;
-        (!is_folded[line_at], Reverse(evaluations[line_at]), line)
+        let form = fold(&queries[line_at], n_dense);
+        let shape = form.ops.iter().fold(form.len as u32, |shape, &op| shape * 3 + op as u32);
+        let shape = if is_folded[line_at] { shape } else { 0 };
+        (!is_folded[line_at], shape, Reverse(evaluations[line_at]), line)
     });
     let mut position_of_line = vec![0; lines.len()];
     for (position, &line) in lines.iter().enumerate() {
