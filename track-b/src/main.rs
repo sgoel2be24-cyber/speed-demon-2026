@@ -16,7 +16,7 @@ use std::path::Path;
 use std::ptr::null_mut;
 use std::{env, io, slice, thread};
 
-/// Using fewer shards than this could overflow the 16-bit local document numbers.
+/// Minimum worker count for the default run.
 const MIN_SHARDS: usize = 12;
 
 const PROT_READ: i32 = 1;
@@ -78,9 +78,16 @@ fn map_file(path: &Path) -> io::Result<&'static [u8]> {
     }
 }
 
-/// Cuts the file into `count` parts of about equal size, each ending just after an LF.
+/// Cuts the file into about `count` byte-balanced parts, each ending just after an LF.
+/// Dense ids let us check each part's document count without counting its lines. Only
+/// an oversized part needs another pass to split it below the 16-bit local-id limit.
 fn shards(bytes: &[u8], count: usize) -> Vec<&[u8]> {
     let mut parts = Vec::with_capacity(count);
+    let last = bytes[..bytes.len() - 1]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |lf| lf + 1);
+    let n_docs = scan::parse_id(bytes, last).0 + 1;
     let mut start = 0;
     for i in 1..=count {
         let target = bytes.len() * i / count;
@@ -89,6 +96,24 @@ fn shards(bytes: &[u8], count: usize) -> Vec<&[u8]> {
             .position(|&b| b == b'\n')
             .map_or(bytes.len(), |lf| target.max(start + 1) + lf);
         if end > start {
+            let after = if end == bytes.len() {
+                n_docs
+            } else {
+                scan::parse_id(bytes, end).0
+            };
+            while after - scan::parse_id(bytes, start).0 > eval::NEVER as u32 {
+                let cut = bytes[start..end]
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &b)| b == b'\n')
+                    .nth(eval::NEVER as usize - 1)
+                    .expect("an oversized shard has enough lines")
+                    .0
+                    + start
+                    + 1;
+                parts.push(&bytes[start..cut]);
+                start = cut;
+            }
             parts.push(&bytes[start..end]);
             start = end;
         }

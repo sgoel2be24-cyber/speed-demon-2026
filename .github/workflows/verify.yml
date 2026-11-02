@@ -64,6 +64,25 @@ jobs:
       - name: Fuzz
         run: python verify/fuzz.py --reference contest/reference/b_index.py --rounds 300 --seed 4242 --keep .out/fuzz-failure
 
+      - name: Check shard and block boundary regressions
+        run: python verify/regressions.py --reference contest/reference/b_index.py
+
+      - name: Build with AddressSanitizer
+        working-directory: track-b
+        env:
+          RUSTC_BOOTSTRAP: "1"
+          RUSTFLAGS: -C target-cpu=x86-64-v3 -Zsanitizer=address -Cdebuginfo=1
+          CARGO_TARGET_DIR: ${{ github.workspace }}/.out/asan-target
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Check unsafe paths with AddressSanitizer
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          binary="$PWD/.out/asan-target/x86_64-unknown-linux-gnu/release/solution"
+          python verify/regressions.py --reference contest/reference/b_index.py --binary "$binary"
+          python verify/fuzz.py --reference contest/reference/b_index.py --binary "$binary" --rounds 100 --seed 20261102 --keep .out/asan-fuzz-failure
+
       - name: Build and verify the actual PGO Docker image on holdout seeds
         run: python verify/docker.py --data data
 

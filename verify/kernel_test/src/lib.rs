@@ -140,4 +140,80 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn every_dense_rare_pattern_and_operator_sequence() {
+        let mut text = String::new();
+        let mut line = 0;
+        for len in 1..=6usize {
+            for dense_mask in 0..1usize << len {
+                for operators in 0..3usize.pow((len - 1) as u32) {
+                    text.push_str("BOOL ");
+                    let mut ops = operators;
+                    for at in 0..len {
+                        if at > 0 {
+                            text.push_str([" AND ", " OR ", " NOT "][ops % 3]);
+                            ops /= 3;
+                        }
+                        if dense_mask >> at & 1 != 0 {
+                            text.push_str(if at % 2 == 0 { "a" } else { "b" });
+                        } else {
+                            text.push_str(&format!("r{line}p{at}"));
+                        }
+                    }
+                    text.push('\n');
+                    line += 1;
+                }
+            }
+        }
+        let plan = queries::compile(text.as_bytes());
+        assert_eq!(plan.n_dense, 2);
+        let mut words = vec![[0; 4]; plan.n_bool_terms as usize];
+        let slots: Vec<u32> = (0..plan.n_bool_terms).collect();
+        for (q, query) in plan.queries.iter().enumerate() {
+            let mut terms = query.terms[..query.len as usize].to_vec();
+            terms.sort_unstable();
+            terms.dedup();
+            for (at, &term) in terms.iter().enumerate() {
+                let mask = (0..1usize << terms.len())
+                    .filter(|&assignment| assignment >> at & 1 != 0)
+                    .fold(0, |mask, assignment| mask | 1u64 << assignment);
+                words[term as usize] = [mask, 0, 0, 0];
+            }
+            let actual = eval::evaluate(query, &words, &slots);
+            let mut expected = 0;
+            for assignment in 0..1usize << terms.len() {
+                let present =
+                    |term| assignment >> terms.iter().position(|&t| t == term).unwrap() & 1 != 0;
+                let mut result = present(query.terms[0]);
+                for at in 1..query.len as usize {
+                    let value = present(query.terms[at]);
+                    result = match query.ops[at - 1] {
+                        queries::Op::And => result && value,
+                        queries::Op::Or => result || value,
+                        queries::Op::Not => result && !value,
+                    };
+                }
+                expected |= u64::from(result) << assignment;
+            }
+            assert_eq!(actual, [expected, 0, 0, 0]);
+            let triggered = terms
+                .iter()
+                .filter(|&&t| plan.triggers.get(t).contains(&(q as u32)))
+                .fold(0, |bits, &t| bits | words[t as usize][0]);
+            let folded = plan
+                .forms
+                .get(q)
+                .map_or([0; 4], |form| eval::evaluate_form(form, &words));
+            assert_eq!(
+                (actual[0] ^ folded[0]) & !triggered,
+                0,
+                "a query must use its exact form or be triggered: {q}"
+            );
+            for &term in &terms {
+                words[term as usize] = [0; 4];
+            }
+        }
+        println!("checked {line} dense/rare and operator patterns, all truth assignments");
+    }
 }

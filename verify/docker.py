@@ -53,7 +53,9 @@ def main():
     call(sys.executable, "verify/fuzz.py", "--reference", "contest/reference/b_index.py",
          "--binary", str(binary), "--rounds", "300", "--seed", "909",
          "--keep", str(evidence / "fuzz-failure"))
-    print("PASS  PGO image: full seeds 2 and 3, then 300 differential fuzz rounds")
+    call(sys.executable, "verify/regressions.py", "--reference", "contest/reference/b_index.py",
+         "--binary", str(binary))
+    print("PASS  PGO image: full seeds 2 and 3, 300 differential fuzz rounds, regressions")
 
 
 if __name__ == "__main__":

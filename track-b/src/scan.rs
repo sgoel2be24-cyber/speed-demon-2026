@@ -43,7 +43,7 @@ fn classify_end(bytes: &[u8], at: usize) -> (u32, u32) {
 }
 
 /// Parses the decimal id at the start of a line. Returns the id and the position of its TAB.
-fn parse_id(bytes: &[u8], mut at: usize) -> (u32, usize) {
+pub(crate) fn parse_id(bytes: &[u8], mut at: usize) -> (u32, usize) {
     let mut id = 0;
     while bytes[at] != b'\t' {
         id = id * 10 + (bytes[at] - b'0') as u32;
@@ -243,7 +243,7 @@ fn check_phrases(plan: &Compiled, ids: &[u32], at: usize, doc: u16, totals: &mut
 /// Scans whole lines of `docs.txt` and returns each query's answer within them.
 ///
 /// `shard` must end just after an LF. Local document numbers stay below `NEVER`, which is
-/// checked: at 250,000 documents and at least 12 shards they are around 21,000.
+/// checked here and bounded when the file is split into shards.
 pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
     let (base, _) = parse_id(shard, 0);
     let mut totals = Totals::new(base, plan.queries.len());
