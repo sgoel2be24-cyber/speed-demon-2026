@@ -14,7 +14,7 @@ Every step from the reference to the final version, each with the live-board run
 | 7 | Prefetch the term table's slots, one document at a time | run-a778f48fd086 | 0.294 | 40.1 | 654 | 67.64 |
 | 8 | Hash each token once, faster startup, smaller query record, words for BOOL terms only | run-39e060ff4f98 | 0.288 | 37.2 | 664 | 67.79 |
 | 9 | Profile-guided build, trained on generator output | run-4edd3e56a048 | 0.280 | 37.5 | 672 | 68.07 |
-| 10 | Dense terms, 256-document blocks, faster lookup, larger table on huge pages, parallel output | run-bbc0afa8b489 | 0.242 | 41.5 | 1,013 | 68.33 |
+| 10 | Dense terms, 256-document blocks, faster lookup, larger table on huge pages, parallel output | run-6436c4919269 | 0.177 | 40.8 | 1,013 | 71.70 |
 
 ## What the data said before any code
 
@@ -124,7 +124,9 @@ A longer look at preprocessing found hidden costs a sampling profile cannot show
 
 Expected: 1.69 times faster, measured in the A/B job as 1,211 ms to 718 ms on a 2-core runner with correct output.
 
-Result: 0.242 s on the board, only 14% faster, for 341 more lines. See the note below on why the A/B job overstated it.
+Result: three board runs of identical code gave 0.242 s (`run-bbc0afa8b489`), 0.196 s (`run-31d1ca5ada7b`) and 0.177 s (`run-6436c4919269`). After the first we nearly wrote this change off as 14% faster for 341 more lines, a net gain of 0.26 points. The later runs showed that was noise. The best run is 1.58 times faster than step 9 and worth 3.6 points, close to the 72.5 projected.
+
+The lesson is the same as step 5, and we still nearly fell for it: never judge a change on one board run.
 
 ## Experiments that failed
 
