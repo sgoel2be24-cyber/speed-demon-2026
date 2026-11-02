@@ -127,6 +127,55 @@ impl Block {
     }
 }
 
+/// Finds each token's home in the term table and starts loading it. These loops stand alone
+/// so that the compiler has few values to keep track of and can hold them all in registers.
+#[inline(never)]
+fn hash_tokens(plan: &Compiled, shard: &[u8], tokens: &[[u32; 2]], keys: &mut [(usize, Key)]) {
+    for (&[start, end], entry) in tokens.iter().zip(keys) {
+        let key = Key::at(shard, start as usize, (end - start) as usize);
+        *entry = (plan.table.prefetch(key), key);
+    }
+}
+
+/// Turns tokens into term ids and sets each term's bit for document `doc`.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn set_words(
+    plan: &Compiled,
+    shard: &[u8],
+    tokens: &[[u32; 2]],
+    keys: &[(usize, Key)],
+    ids: &mut [u32],
+    block: &mut Block,
+    anchored: &mut Vec<usize>,
+    doc: u16,
+) {
+    let (part, bit) = (doc as usize / 64 % 4, 1u64 << (doc % 64));
+    let (table, n_bool_terms, absent) = (&plan.table, plan.n_bool_terms, block.absent);
+    let mut n_rare = block.n_rare;
+    let (words, slots, rare) = (&mut block.words[..], &mut block.slots[..], &mut block.rare[..]);
+    let first_rare = absent + 1;
+    for (position, ((id, &[start, end]), &(home, key))) in
+        ids.iter_mut().zip(tokens).zip(keys).enumerate()
+    {
+        let found = table.lookup(home, key, shard, start as usize, end as usize);
+        *id = found.id();
+        // Written without branches: whether a token is new to the block is unpredictable.
+        let term = found.id().min(n_bool_terms);
+        let slot = slots[term as usize];
+        let is_new = slot == absent;
+        let slot = if is_new { first_rare + n_rare as u32 } else { slot };
+        slots[term as usize] = slot;
+        rare[n_rare] = term;
+        n_rare += is_new as usize;
+        words[slot as usize][part] |= bit;
+        if found.is_anchor() {
+            anchored.push(position);
+        }
+    }
+    block.n_rare = n_rare;
+}
+
 /// Checks the phrases anchored at position `at` of a document's token ids. The ids are those
 /// of this document alone, and separators are not in them, so a phrase cannot cross into
 /// another document and any punctuation between its terms is invisible.
@@ -160,7 +209,6 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
         let line_end = find_token_edges(shard, tab + 1, &mut edges);
         at = line_end + 1;
 
-        let (part, bit) = (doc as usize / 64 % 4, 1u64 << (doc % 64));
         let tokens = edges.as_chunks::<2>().0;
         // These only ever grow, so that a document pays for no clearing.
         if ids.len() < tokens.len() {
@@ -168,29 +216,8 @@ pub fn scan_shard(plan: &Compiled, shard: &[u8]) -> Totals {
             keys.resize(tokens.len(), (0, Key::default()));
         }
         anchored.clear();
-        for (&[start, end], entry) in tokens.iter().zip(&mut keys) {
-            let key = Key::at(shard, start as usize, (end - start) as usize);
-            *entry = (plan.table.prefetch(key), key);
-        }
-        for (position, ((id, &[start, end]), &(home, key))) in
-            ids.iter_mut().zip(tokens).zip(&keys).enumerate()
-        {
-            let found = plan.table.lookup(home, key, shard, start as usize, end as usize);
-            *id = found.id();
-            // Written without branches: whether a token is new to the block is unpredictable.
-            let term = found.id().min(plan.n_bool_terms);
-            let slot = block.slots[term as usize];
-            let is_new = slot == block.absent;
-            let next = block.absent + 1 + block.n_rare as u32;
-            let slot = if is_new { next } else { slot };
-            block.slots[term as usize] = slot;
-            block.rare[block.n_rare] = term;
-            block.n_rare += is_new as usize;
-            block.words[slot as usize][part] |= bit;
-            if found.is_anchor() {
-                anchored.push(position);
-            }
-        }
+        hash_tokens(plan, shard, tokens, &mut keys);
+        set_words(plan, shard, tokens, &keys, &mut ids, &mut block, &mut anchored, doc);
         for &position in &anchored {
             check_phrases(plan, &ids[..tokens.len()], position, doc, &mut totals);
         }
