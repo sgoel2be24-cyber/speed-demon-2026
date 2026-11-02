@@ -51,7 +51,7 @@ def main():
         "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD:track-b/src"], cwd=ROOT, text=True).strip(),
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         "full_cases": checks,
-        "fuzz": {"passed": False, "rounds": 300, "seed": 909, "threads": [1, 3, 12]},
+        "fuzz": {"passed": False, "rounds": 300, "seed": 909, "threads": [1, 3, 6, 12]},
         "regressions": {"passed": False},
     }
     evidence.joinpath("checks.json").write_text(json.dumps(metadata, indent=2) + "\n")

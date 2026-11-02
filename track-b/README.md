@@ -4,7 +4,9 @@ The task, the input files and the exact output format are in the [spec](https://
 
 ## Approach
 
-This solution builds no index. The queries are readable from the start, so it reads them first, then answers all of them during one pass over the corpus on 12 threads. Nothing about the corpus is kept beyond the current 256 documents, and the file itself is memory-mapped, so peak memory stays under the 44 MB where the memory score stops improving.
+This solution builds no index. The queries are readable from the start, so it reads them first, then answers all of them during one pass over the corpus. The current container candidate explicitly uses six scan workers; the command-line binary also accepts a worker count. Nothing about the corpus is kept beyond the current 256 documents per worker, and the file itself is memory-mapped. The historical board version used twelve workers and peaked at 41.05 MB; board time and memory for six workers are still unmeasured.
+
+The preferred next board experiment is the verified six-worker control `39386e7`. The [optimisation log](../verify/OPTIMIZATION-82.md) records all paired runner comparisons and rejected alternatives. No 82-point result is claimed.
 
 **BOOL queries** run on blocks of 256 documents. Each thread keeps a 256-bit word per query term, where bit `i` says whether document `i` of the block contains the term. A query is then evaluated on all 256 documents at once: `AND`, `OR` and `NOT` become `&`, `|` and `& !`, applied strictly left to right as the spec defines them.
 

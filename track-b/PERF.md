@@ -178,3 +178,11 @@ No new optimisation or board run was performed during the verification audit. Th
 Measured: byte-balanced shards could exceed 65,535 documents on a deliberately clustered short/long corpus, even at 12 threads, and abort. The correction bounds each shard using the dense input ids and splits only oversized parts. The reproducer has the full 250,000-document count and legal text, but its clustered distribution is unlike the generator's independent draws. No generated-seed failure has been observed. This is a correctness guard, with no measured board speed or source-size result yet. Verification evidence and exact commands are in the [verification audit](../verify/AUDIT.md).
 
 Human review remains pending. Before freeze, a teammate should check the recorded measurements and explain the key tradeoffs in their own words. The audit cannot attest to that understanding on the team's behalf.
+
+## Later optimisation attempt: six-worker candidate
+
+Measured: six workers instead of twelve improved median time by about 5–11% across paired x86 CI batches on full seeds 2 and 3. The most recent fixed-source comparison (`41440802609`, 13 measured rounds per seed) put the six-worker control 6.3% ahead of twelve workers. These are two-CPU runner measurements, not scoring-box T/M/S or board points. The exact six-worker Docker/PGO image passed holdout, fuzz and sanitizer verification in CI run `41434113427`.
+
+Other original candidates were tested and rejected: sparse tally, fused token/key preparation, shared-phase bitmaps/postings at several sizes, and standard-library hash tables. A small layout/hash change won on some runners but failed final cross-host replication; the six-worker control retains the audited hash and id layout. Full-size PGO training gave no repeatable gain, so training remains sample seed 7.
+
+The [optimisation log](../verify/OPTIMIZATION-82.md) contains the ratios and linked evidence, with findings labelled measured, read from code or hypothesis. Scoring-box benefit remains a hypothesis until an authorised board run. The historical 71.93-point result above belongs to the earlier twelve-worker entry, not this candidate. The target of 82 has not been demonstrated.

@@ -1,0 +1,51 @@
+{
+  "run_id": 41440802609,
+  "source": "https://github.com/sgoel2be24-cyber/speed-demon-2026/actions/runs/41440802609",
+  "scope": "13 measured rounds per held-out full seed; fixed audited baseline 4a13116 and actual clean entry 9b71676; not scoring-box measurements",
+  "all_candidate_hashes_fuzz_and_regressions_passed": true,
+  "summary": {
+    "baseline/12": {
+      "median_seconds": {
+        "2": 0.40424545499999454,
+        "3": 0.40874566799999457
+      },
+      "mean_ratio_to_baseline": 1
+    },
+    "entry/12": {
+      "median_seconds": {
+        "2": 0.4090213260000155,
+        "3": 0.4095200379999824
+      },
+      "mean_ratio_to_baseline": 1.0068543941103998
+    },
+    "baseline/6": {
+      "median_seconds": {
+        "2": 0.3797269919999735,
+        "3": 0.38231876300000067
+      },
+      "mean_ratio_to_baseline": 0.937346960720103
+    },
+    "baseline/24": {
+      "median_seconds": {
+        "2": 0.4645304979999878,
+        "3": 0.46384520799995244
+      },
+      "mean_ratio_to_baseline": 1.1419656621964263
+    },
+    "entry/6": {
+      "median_seconds": {
+        "2": 0.38602037799995514,
+        "3": 0.3834019509999962
+      },
+      "mean_ratio_to_baseline": 0.9464560901024384
+    }
+  },
+  "memory_samples_from_log": [
+    "2026-11-02T12:02:12.5860532Z baseline/12 {'sampled_peak_RssAnon_MiB': 35.94921875, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T12:02:13.0007194Z entry/12 {'sampled_peak_RssAnon_MiB': 33.51953125, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T12:02:13.4012688Z baseline/6 {'sampled_peak_RssAnon_MiB': 24.1796875, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T12:02:13.8949090Z baseline/24 {'sampled_peak_RssAnon_MiB': 58.71484375, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}",
+    "2026-11-02T12:02:14.2872291Z entry/6 {'sampled_peak_RssAnon_MiB': 23.29296875, 'scope': '1ms /proc sampling, lower bound; not board cgroup M'}"
+  ]
+}
+

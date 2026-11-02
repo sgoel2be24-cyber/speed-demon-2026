@@ -120,7 +120,7 @@ def main():
     ap.add_argument("--reference", required=True)
     ap.add_argument("--rounds", type=int, default=200)
     ap.add_argument("--seed", type=int, default=2026)
-    ap.add_argument("--threads", default="1,3,12")
+    ap.add_argument("--threads", default="1,3,6,12")
     ap.add_argument("--binary", default=BINARY)
     ap.add_argument("--timeout", type=float, default=30)
     ap.add_argument("--keep", help="copy the first failing case to this folder")
