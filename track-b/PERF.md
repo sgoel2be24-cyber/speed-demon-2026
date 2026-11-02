@@ -150,7 +150,7 @@ A sampling profile of step 7, on a GitHub x86-64 runner, share of CPU time:
 | Per-token loop: setting term words | 16% |
 | Phrase checks | 3% |
 
-Kernel time barely shows, which rules out page faults on this runner. After this, small changes to the existing loops stopped paying, and several made things worse. Going much further needs a different shape for lookup or evaluation, not more tuning. Line count matters as much from here: 100 fewer lines is worth about a point, the same as a 15% speed-up that adds 100 lines.
+Kernel time barely shows, which rules out page faults on this runner. After this, small changes to the existing loops stopped paying, and several made things worse. Going much further needs a different shape for lookup or evaluation, not more tuning. Line count matters less than it first seemed: at about 1,000 lines, 100 fewer are worth about 0.34 points, the same as 3% more speed.
 
 ## Experiments still to try on the board
 
